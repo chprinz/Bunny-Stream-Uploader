@@ -9,6 +9,17 @@ import Foundation
 
 enum UploadStatus: String, Codable {
     case pending, uploading, paused, success, failed, canceled
+
+    // User-facing status buckets
+    var uiLabel: String {
+        switch self {
+        case .uploading, .pending: return "Uploading"
+        case .paused: return "Paused"
+        case .success: return "Ready"
+        case .failed: return "Failed"
+        case .canceled: return "Canceled"
+        }
+    }
 }
 
 struct UploadItem: Identifiable, Codable {
@@ -31,6 +42,12 @@ struct UploadItem: Identifiable, Codable {
     var videoId: String? = nil
     var errorMessage: String? = nil
     var completedAt: Date? = nil
+    var remoteTitle: String? = nil
+    var remoteDescription: String? = nil
+    var remoteThumbnailPath: String? = nil
+    var remoteStatusCode: Int? = nil
+    var remoteEncodeProgress: Double? = nil
+    var processingReadyNotified: Bool = false
 
     // TUS Resume Support
     var tusUploadURL: URL? = nil
@@ -66,6 +83,12 @@ struct UploadItem: Identifiable, Codable {
         self.videoId = videoId
         self.errorMessage = nil
         self.completedAt = completedAt
+        self.remoteTitle = nil
+        self.remoteDescription = nil
+        self.remoteThumbnailPath = nil
+        self.remoteStatusCode = nil
+        self.remoteEncodeProgress = nil
+        self.processingReadyNotified = false
         self.tusUploadURL = nil
         self.bytesUploaded = 0
         self.totalBytes = 0
@@ -80,6 +103,8 @@ struct UploadItem: Identifiable, Codable {
         case status, progress, speedMBps, etaSeconds
         case videoId, errorMessage
         case completedAt
+        case remoteTitle, remoteDescription, remoteThumbnailPath
+        case remoteStatusCode, remoteEncodeProgress, processingReadyNotified
         case tusUploadURL, bytesUploaded, totalBytes, lastResumeAttempt
     }
 
@@ -123,6 +148,12 @@ struct UploadItem: Identifiable, Codable {
         self.videoId = try c.decodeIfPresent(String.self, forKey: .videoId)
         self.errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
         self.completedAt = try c.decodeIfPresent(Date.self, forKey: .completedAt)
+        self.remoteTitle = try c.decodeIfPresent(String.self, forKey: .remoteTitle)
+        self.remoteDescription = try c.decodeIfPresent(String.self, forKey: .remoteDescription)
+        self.remoteThumbnailPath = try c.decodeIfPresent(String.self, forKey: .remoteThumbnailPath)
+        self.remoteStatusCode = try c.decodeIfPresent(Int.self, forKey: .remoteStatusCode)
+        self.remoteEncodeProgress = try c.decodeIfPresent(Double.self, forKey: .remoteEncodeProgress)
+        self.processingReadyNotified = try c.decodeIfPresent(Bool.self, forKey: .processingReadyNotified) ?? false
 
         self.tusUploadURL = try c.decodeIfPresent(URL.self, forKey: .tusUploadURL)
         self.bytesUploaded = try c.decodeIfPresent(Int64.self, forKey: .bytesUploaded) ?? 0
@@ -149,6 +180,12 @@ struct UploadItem: Identifiable, Codable {
         try c.encodeIfPresent(videoId, forKey: .videoId)
         try c.encodeIfPresent(errorMessage, forKey: .errorMessage)
         try c.encodeIfPresent(completedAt, forKey: .completedAt)
+        try c.encodeIfPresent(remoteTitle, forKey: .remoteTitle)
+        try c.encodeIfPresent(remoteDescription, forKey: .remoteDescription)
+        try c.encodeIfPresent(remoteThumbnailPath, forKey: .remoteThumbnailPath)
+        try c.encodeIfPresent(remoteStatusCode, forKey: .remoteStatusCode)
+        try c.encodeIfPresent(remoteEncodeProgress, forKey: .remoteEncodeProgress)
+        try c.encode(processingReadyNotified, forKey: .processingReadyNotified)
 
         try c.encodeIfPresent(tusUploadURL, forKey: .tusUploadURL)
         try c.encode(bytesUploaded, forKey: .bytesUploaded)
@@ -163,5 +200,9 @@ struct UploadItem: Identifiable, Codable {
         if s < 60 { return "\(s)s" }
         if s < 3600 { return "\(s / 60)m \(s % 60)s" }
         return "\(s / 3600)h \((s % 3600) / 60)m"
+    }
+
+    var displayTitle: String {
+        remoteTitle?.isEmpty == false ? (remoteTitle ?? "") : file.lastPathComponent
     }
 }

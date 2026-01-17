@@ -55,6 +55,15 @@ private let lastLibraryKey = "LastSelectedLibrary_v1"
         KeychainService.load(key: lib.id.uuidString)
     }
 
+    // Optional: token auth key for signed CDN URLs (read from Keychain or env)
+    func tokenAuthKey(for lib: LibraryConfig) -> String? {
+        let envKey = "BUNNY_TOKEN_\(lib.libraryId)"
+        if let env = ProcessInfo.processInfo.environment[envKey], !env.isEmpty {
+            return env
+        }
+        return KeychainService.load(key: lib.id.uuidString + ":thumbToken")
+    }
+
     private func save() {
         guard let data = try? JSONEncoder().encode(libraries) else { return }
         UserDefaults.standard.set(data, forKey: storageKey)

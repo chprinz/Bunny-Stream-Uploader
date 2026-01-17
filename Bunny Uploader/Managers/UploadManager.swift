@@ -8,6 +8,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import UserNotifications
 import IOKit.pwr_mgt
 
 final class UploadManager: ObservableObject {
@@ -413,6 +414,165 @@ final class UploadManager: ObservableObject {
         persistItems()
     }
 
+    // Delete a finished video from Bunny and remove locally
+    func deleteFromBunny(itemId: UUID, completion: @escaping (Bool) -> Void) {
+        guard let idx = items.firstIndex(where: { $0.id == itemId }) else {
+            completion(false)
+            return
+        }
+        let item = items[idx]
+
+        guard let videoId = item.videoId else {
+            items.removeAll { $0.id == itemId }
+            persistItems()
+            completion(true)
+            return
+        }
+
+        guard let lib = store.libraries.first(where: { $0.id.uuidString == item.libraryConfigId }),
+              let apiKey = store.apiKey(for: lib) else {
+            completion(false)
+            return
+        }
+
+        let api = APIService(streamKey: apiKey)
+        api.deleteVideo(libraryId: item.libraryId, videoId: videoId) { [weak self] ok in
+            DispatchQueue.main.async {
+                if ok {
+                    self?.items.removeAll { $0.id == itemId }
+                    self?.persistItems()
+                }
+                completion(ok)
+            }
+        }
+    }
+
+    // Refresh metadata from Bunny
+    func refreshVideoDetails(itemId: UUID, completion: @escaping (UploadItem?) -> Void) {
+        guard let idx = items.firstIndex(where: { $0.id == itemId }) else {
+            completion(nil); return
+        }
+        let item = items[idx]
+        guard let videoId = item.videoId else { completion(nil); return }
+        guard let api = apiService(for: item) else { completion(nil); return }
+
+        api.fetchVideoDetails(libraryId: item.libraryId, videoId: videoId) { [weak self] status, json in
+            guard let self else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            // Remove locally if Bunny reports not found
+            if status == 404 {
+                DispatchQueue.main.async {
+                    self.items.removeAll { $0.id == itemId }
+                    self.persistItems()
+                    completion(nil)
+                }
+                return
+            }
+
+            guard let json else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            let title = json["title"] as? String
+            let desc = json["description"] as? String
+            let thumb = (json["thumbnailFileName"] as? String)
+                ?? (json["thumbnailFilename"] as? String)
+                ?? (json["thumbnail"] as? String)
+                ?? (json["thumbnailUrl"] as? String)
+                ?? (json["thumbnailURL"] as? String)
+            let remoteStatus = json["status"] as? Int
+            let encodeProgress: Double? = {
+                if let p = json["encodeProgress"] as? Double { return p }
+                if let p = json["encodeProgress"] as? Int { return Double(p) }
+                return nil
+            }()
+
+            DispatchQueue.main.async {
+                if let i = self.items.firstIndex(where: { $0.id == itemId }) {
+                    self.items[i].remoteTitle = title
+                    self.items[i].remoteDescription = desc
+                    self.items[i].remoteThumbnailPath = thumb
+                    self.items[i].remoteStatusCode = remoteStatus
+                    self.items[i].remoteEncodeProgress = encodeProgress
+                    if let prog = encodeProgress, prog >= 100, !self.items[i].processingReadyNotified {
+                        self.items[i].processingReadyNotified = true
+                        self.persistItems()
+                        self.sendReadyNotification(for: self.items[i])
+                    } else {
+                        self.persistItems()
+                    }
+                    completion(self.items[i])
+                } else {
+                    completion(nil)
+                }
+            }
+        }
+    }
+
+    // Update title/description on Bunny
+    func updateMetadata(
+        itemId: UUID,
+        title: String?,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard let idx = items.firstIndex(where: { $0.id == itemId }) else {
+            completion(false); return
+        }
+        let item = items[idx]
+        guard let videoId = item.videoId else { completion(false); return }
+        guard let api = apiService(for: item) else { completion(false); return }
+
+        api.updateVideoDetails(libraryId: item.libraryId, videoId: videoId, title: title, description: nil) { [weak self] ok in
+            guard let self else {
+                DispatchQueue.main.async { completion(ok) }
+                return
+            }
+
+            if ok {
+                // Fetch fresh state to reflect Bunny's final value
+                self.refreshVideoDetails(itemId: itemId) { _ in
+                    DispatchQueue.main.async { completion(true) }
+                }
+            } else {
+                DispatchQueue.main.async { completion(false) }
+            }
+        }
+    }
+
+    // Upload custom thumbnail to Bunny
+    func uploadThumbnail(
+        itemId: UUID,
+        data: Data,
+        mimeType: String,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard let idx = items.firstIndex(where: { $0.id == itemId }) else {
+            completion(false); return
+        }
+        let item = items[idx]
+        guard let videoId = item.videoId else { completion(false); return }
+        guard let api = apiService(for: item) else { completion(false); return }
+
+        api.uploadThumbnail(libraryId: item.libraryId, videoId: videoId, data: data, mimeType: mimeType) { [weak self] ok in
+            DispatchQueue.main.async {
+                if ok, let i = self?.items.firstIndex(where: { $0.id == itemId }) {
+                    self?.items[i].remoteThumbnailPath = nil
+                    self?.persistItems()
+                }
+                completion(ok)
+            }
+        }
+    }
+
+
+    private func apiService(for item: UploadItem) -> APIService? {
+        guard let lib = store.libraries.first(where: { $0.id.uuidString == item.libraryConfigId }),
+              let apiKey = store.apiKey(for: lib) else { return nil }
+        return APIService(streamKey: apiKey)
+    }
+
     // MARK: - Metrics + status helpers
 
     private func updateMetrics(itemId: UUID, progress: Double, mbps: Double, eta: TimeInterval) {
@@ -432,6 +592,7 @@ final class UploadManager: ObservableObject {
             self.items[idx].progress = 1.0
             self.items[idx].completedAt = Date()
             self.persistItems()
+            self.pollProcessingReady(itemId: itemId, attempt: 0)
         }
     }
 
@@ -488,6 +649,42 @@ final class UploadManager: ObservableObject {
             self.items = decoded
         } catch {
             print("Failed to load persisted uploads:", error)
+        }
+    }
+
+    private func sendReadyNotification(for item: UploadItem) {
+        let content = UNMutableNotificationContent()
+        content.title = "Video ready"
+        content.body = item.displayTitle
+        content.sound = .default
+
+        let req = UNNotificationRequest(identifier: "ready-\(item.id.uuidString)", content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
+    }
+
+    private func pollProcessingReady(itemId: UUID, attempt: Int) {
+        guard attempt < 30 else { return } // stop after ~30 attempts
+        guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
+        let item = items[idx]
+        guard item.status == .success else { return }
+
+        refreshVideoDetails(itemId: itemId) { [weak self] updated in
+            guard let self else { return }
+            if let up = updated,
+               let prog = up.remoteEncodeProgress,
+               prog >= 100,
+               !up.processingReadyNotified {
+                if let i = self.items.firstIndex(where: { $0.id == itemId }) {
+                    self.items[i].processingReadyNotified = true
+                    self.persistItems()
+                    self.sendReadyNotification(for: self.items[i])
+                }
+                return
+            }
+            // schedule next poll
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+                self.pollProcessingReady(itemId: itemId, attempt: attempt + 1)
+            }
         }
     }
 }
