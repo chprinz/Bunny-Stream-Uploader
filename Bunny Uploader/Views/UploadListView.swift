@@ -14,12 +14,16 @@ struct UploadListView: View {
     @State private var pendingDeleteItem: UploadItem? = nil
     @State private var showHistory = false
 
+    private let recentSuccessWindow: TimeInterval = 2.5
+
     private var activeItems: [UploadItem] {
         uploads.items.filter { item in
             if let libId = selectedLibraryId {
+                let isRecentSuccess = item.status == .success &&
+                    (item.completedAt ?? item.createdAt) > Date().addingTimeInterval(-recentSuccessWindow)
+
                 return item.libraryConfigId == libId.uuidString &&
-                       item.status != .success &&
-                       item.status != .failed
+                    (item.status != .success && item.status != .failed || isRecentSuccess)
             } else {
                 return false
             }
@@ -29,12 +33,39 @@ struct UploadListView: View {
     private var historyItems: [UploadItem] {
         uploads.items.filter { item in
             if let libId = selectedLibraryId {
+                let isRecentSuccess = item.status == .success &&
+                    (item.completedAt ?? item.createdAt) > Date().addingTimeInterval(-recentSuccessWindow)
                 return item.libraryConfigId == libId.uuidString &&
-                       (item.status == .success || item.status == .failed)
+                       (item.status == .success || item.status == .failed) &&
+                       !isRecentSuccess
             } else {
                 return false
             }
         }
+        .sorted { (lhs, rhs) in
+            let lDate = lhs.completedAt ?? lhs.createdAt
+            let rDate = rhs.completedAt ?? rhs.createdAt
+            return lDate > rDate
+        }
+    }
+
+    private var historySections: [(date: Date, title: String, items: [UploadItem])] {
+        let cal = Calendar.current
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+
+        let groups = Dictionary(grouping: historyItems) { item -> Date in
+            let date = item.completedAt ?? item.createdAt
+            return cal.startOfDay(for: date)
+        }
+
+        return groups
+            .map { key, value in
+                (date: key,
+                 title: formatter.string(from: key),
+                 items: value.sorted { ($0.completedAt ?? $0.createdAt) > ($1.completedAt ?? $1.createdAt) })
+            }
+            .sorted { $0.date > $1.date }
     }
 
     var body: some View {
@@ -49,55 +80,76 @@ struct UploadListView: View {
                 }
                 ForEach(activeItems) { item in
                     VStack(alignment: .leading, spacing: 10) {
-                        HStack(alignment: .center, spacing: 10) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(item.file.lastPathComponent)
-                                    .font(.subheadline.weight(.medium))
-                                    .lineLimit(1)
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(alignment: .center, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(item.file.lastPathComponent)
+                                        .font(.subheadline.weight(.medium))
+                                        .lineLimit(1)
 
-                                Text(statusLine(for: item))
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-
-                            Spacer()
-
-                            HStack(spacing: 8) {
-                                if item.status == .uploading {
-                                    controlButton(
-                                        systemName: "pause.fill",
-                                        action: { uploads.pause(itemId: item.id) },
-                                        hint: "Pause upload"
-                                    )
-                                } else if item.status == .paused {
-                                    controlButton(
-                                        systemName: "play.fill",
-                                        action: { uploads.resume(itemId: item.id) },
-                                        hint: "Resume upload"
-                                    )
+                                    if item.status == .success {
+                                        Text(completionLine(for: item))
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    } else {
+                                        Text(statusLine(for: item))
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
                                 }
 
-                                controlButton(
-                                    systemName: "xmark",
-                                    action: {
+                                Spacer()
+
+                                if item.status == .success {
+                                    statusPill(for: item)
+                                } else {
+                                    HStack(spacing: 8) {
                                         if item.status == .uploading {
-                                            pendingDeleteItem = item
-                                            showDeleteAlert = true
-                                        } else {
-                                            uploads.cancel(itemId: item.id)
+                                            controlButton(
+                                                systemName: "pause.fill",
+                                                action: { uploads.pause(itemId: item.id) },
+                                                hint: "Pause upload"
+                                            )
+                                        } else if item.status == .paused {
+                                            controlButton(
+                                                systemName: "play.fill",
+                                                action: { uploads.resume(itemId: item.id) },
+                                                hint: "Resume upload"
+                                            )
                                         }
-                                    },
-                                    hint: item.status == .success ? "Remove from list" : "Cancel / delete"
-                                )
-                                .disabled(item.videoId == nil && item.status != .success)
-                                .opacity(item.videoId == nil && item.status != .success ? 0.3 : 1.0)
+
+                                        controlButton(
+                                            systemName: "xmark",
+                                            action: {
+                                                if item.status == .uploading {
+                                                    pendingDeleteItem = item
+                                                    showDeleteAlert = true
+                                                } else {
+                                                    uploads.cancel(itemId: item.id)
+                                                }
+                                            },
+                                            hint: item.status == .success ? "Remove from list" : "Cancel / delete"
+                                        )
+                                        .disabled(item.videoId == nil && item.status != .success)
+                                        .opacity(item.videoId == nil && item.status != .success ? 0.3 : 1.0)
+                                    }
+                                }
+                            }
+
+                            if item.status == .success {
+                                if let vid = item.videoId {
+                                    Text("Video ID: \(vid)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                        .textSelection(.enabled)
+                                }
+                            } else {
+                                ProgressView(value: item.progress)
+                                    .progressViewStyle(.linear)
+                                    .frame(height: 8)
+                                    .tint(Color("AccentColor").opacity(0.85))
                             }
                         }
-
-                        ProgressView(value: item.progress)
-                            .progressViewStyle(.linear)
-                            .frame(height: 8)
-                            .tint(Color("AccentColor").opacity(0.85))
                     }
                     .padding(14)
                     .background(
@@ -126,51 +178,63 @@ struct UploadListView: View {
 
                 // HISTORY SECTION
                 if showHistory {
-                    ForEach(historyItems) { item in
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Text(item.file.lastPathComponent)
-                                    .font(.subheadline)
-                                    .lineLimit(1)
-
-                                Spacer()
-
-                                statusPill(for: item)
-                            }
-
-                            if let vid = item.videoId, item.status == .success {
-                                Text("Video ID: \(vid)")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                    .textSelection(.enabled)
-                            }
-
-                            Text(completionLine(for: item))
-                                .font(.caption2)
+                    ForEach(historySections, id: \.date) { section in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(section.title)
+                                .font(.caption.weight(.semibold))
                                 .foregroundColor(.secondary)
-                        }
-                        .padding(12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(Color.primary.opacity(0.025))
-                        )
-                        .contextMenu {
-                            Button("Edit settings…") { }
-                                .disabled(true)
+
+                            ForEach(section.items) { item in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        Text(item.file.lastPathComponent)
+                                            .font(.subheadline)
+                                            .lineLimit(1)
+
+                                        Spacer()
+
+                                        statusPill(for: item)
+                                    }
+
+                                    if let vid = item.videoId, item.status == .success {
+                                        Text("Video ID: \(vid)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                            .textSelection(.enabled)
+                                    }
+
+                                    Text(completionLine(for: item))
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(12)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(Color.primary.opacity(0.025))
+                                )
+                                .contextMenu {
+                                    Button("Edit settings…") { }
+                                        .disabled(true)
+                                }
+                                .padding(.trailing, 6) // avoid scrollbar overlap
+                            }
                         }
                     }
 
                     // CLEAR HISTORY BUTTON
                     Button(role: .destructive) {
                         for item in historyItems {
-                            uploads.cancel(itemId: item.id)
+                            uploads.removeFromHistory(itemId: item.id)
                         }
                     } label: {
                         Text("Clear history")
                     }
-                    .padding(.top, 10)
+                    .padding(.top, 12)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
                 }
             }
+            .padding(.bottom, 20)
         }
         .padding(.horizontal, 16)
         .alert("Upload is still running. Delete the video?",
@@ -209,13 +273,13 @@ struct UploadListView: View {
     private func controlButton(systemName: String, action: @escaping () -> Void, hint: String) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Color("AccentColor"))
-                .frame(width: 30, height: 30)
-                .background(Color.primary.opacity(0.07))
+                .frame(width: 24, height: 24)
+                .background(Color.primary.opacity(0.06))
                 .overlay(
                     Capsule()
-                        .stroke(Color("AccentColor").opacity(0.6), lineWidth: 1)
+                        .stroke(Color("AccentColor").opacity(0.5), lineWidth: 1)
                 )
                 .clipShape(Capsule())
         }

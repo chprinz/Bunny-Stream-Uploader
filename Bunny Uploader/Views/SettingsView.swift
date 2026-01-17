@@ -21,12 +21,12 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 18) {
 
             Text("Libraries")
-                .font(.headline)
+                .font(.title3.weight(.semibold))
                 .padding(.horizontal)
-                .padding(.top, 4)
+                .padding(.top, 6)
 
             // MARK: Library Selector (horizontal Pills)
             ScrollView(.horizontal, showsIndicators: false) {
@@ -36,15 +36,24 @@ struct SettingsView: View {
                             selectLibrary(lib)
                         } label: {
                             Text(lib.name)
+                                .font(.callout.weight(.semibold))
                                 .padding(.horizontal, 14)
-                                .padding(.vertical, 6)
+                                .padding(.vertical, 7)
+                                .frame(minHeight: 32)
                                 .background(
-                                    selectedLibraryID == lib.id
-                                    ? Color("AccentColor").opacity(0.2)
-                                    : Color.gray.opacity(0.12)
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(selectedLibraryID == lib.id
+                                              ? Color("AccentColor").opacity(0.2)
+                                              : Color.primary.opacity(0.07))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .stroke(selectedLibraryID == lib.id
+                                                ? Color("AccentColor").opacity(0.7)
+                                                : Color.primary.opacity(0.08),
+                                                lineWidth: 1)
                                 )
                                 .foregroundColor(.primary)
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
@@ -63,19 +72,31 @@ struct SettingsView: View {
                         showAddLibrarySheet = true
                     } label: {
                         Image(systemName: "plus")
+                            .font(.callout.weight(.semibold))
                             .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.gray.opacity(0.12))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .padding(.vertical, 7)
+                            .frame(minHeight: 32)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color.primary.opacity(0.07))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                            )
                     }
                     .buttonStyle(.plain)
                 }
                 .padding(.horizontal)
-                .padding(.vertical, 6)
+                .padding(.vertical, 8)
             }
             .background(
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.gray.opacity(0.06))
+                    .fill(Color.primary.opacity(0.05))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+                    )
             )
             .padding(.horizontal)
 
@@ -83,12 +104,12 @@ struct SettingsView: View {
 
             // MARK: Details Panel
             if let lib = selectedLibrary {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 14) {
 
                     // Name
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Name")
-                            .font(.caption2)
+                            .font(.caption.weight(.semibold))
                             .foregroundColor(.secondary)
 
                         TextField("Name", text: Binding(
@@ -99,13 +120,13 @@ struct SettingsView: View {
                             }
                         ))
                         .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 240)
+                        .frame(maxWidth: .infinity)
                     }
 
                     // Library ID (read-only)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Library ID")
-                            .font(.caption2)
+                            .font(.caption.weight(.semibold))
                             .foregroundColor(.secondary)
 
                         Text(lib.libraryId)
@@ -119,7 +140,7 @@ struct SettingsView: View {
                     // API Key
                     VStack(alignment: .leading, spacing: 4) {
                         Text("API Key")
-                            .font(.caption2)
+                            .font(.caption.weight(.semibold))
                             .foregroundColor(.secondary)
 
                         SecureField("AccessKey", text: Binding(
@@ -130,13 +151,13 @@ struct SettingsView: View {
                             }
                         ))
                         .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 240)
+                        .frame(maxWidth: .infinity)
                     }
 
                     // Default Collection (Dropdown)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Default Collection")
-                            .font(.caption2)
+                            .font(.caption.weight(.semibold))
                             .foregroundColor(.secondary)
 
                         Picker("Default Collection", selection: Binding(
@@ -153,7 +174,7 @@ struct SettingsView: View {
                                 Text(col.name).tag(col.id)
                             }
                         }
-                        .frame(maxWidth: 240)
+                        .frame(maxWidth: .infinity)
                     }
 
                     Divider().padding(.vertical, 6)
@@ -164,11 +185,22 @@ struct SettingsView: View {
                         selectedLibraryID = nil
                     } label: {
                         Text("Delete library")
-                            .font(.callout)
+                            .font(.callout.weight(.semibold))
+                            .foregroundColor(.red)
                     }
+                    .buttonStyle(.borderless)
                     .padding(.top, 4)
 
                 }
+                .padding(14)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.primary.opacity(0.04))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(Color.primary.opacity(0.05), lineWidth: 1)
+                        )
+                )
                 .padding(.horizontal)
             } else {
                 Text("Select a library to edit its settings")

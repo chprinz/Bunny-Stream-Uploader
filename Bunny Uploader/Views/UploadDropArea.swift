@@ -25,8 +25,8 @@ struct UploadDropArea: View {
             VStack(spacing: 6) {
                 Text("Drop files here or click to pick…")
                 if let lib = defaultLibrary {
-                    let collectionPart = defaultCollectionName.map { " · \($0)" } ?? ""
-                    Text("Target: \(lib.name)\(collectionPart)")
+                    let collectionPart = defaultCollectionName.map { " · Collection: \($0)" } ?? ""
+                    Text("Library: \(lib.name)\(collectionPart)")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 } else {

@@ -400,6 +400,19 @@ final class UploadManager: ObservableObject {
         persistItems()
     }
 
+    // Remove a finished/failed item locally (no remote delete)
+    func removeFromHistory(itemId: UUID) {
+        guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
+        let item = items[idx]
+        guard item.status == .success || item.status == .failed || item.status == .canceled else {
+            // fallback to full cancel for unexpected state
+            cancel(itemId: itemId)
+            return
+        }
+        items.removeAll { $0.id == itemId }
+        persistItems()
+    }
+
     // MARK: - Metrics + status helpers
 
     private func updateMetrics(itemId: UUID, progress: Double, mbps: Double, eta: TimeInterval) {
