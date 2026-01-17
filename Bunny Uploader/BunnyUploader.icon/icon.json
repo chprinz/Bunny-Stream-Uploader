@@ -1,0 +1,216 @@
+{
+  "fill-specializations" : [
+    {
+      "value" : {
+        "linear-gradient" : [
+          "display-p3:0.48361,0.37824,0.26667,1.00000",
+          "display-p3:0.24845,0.14632,0.04075,1.00000"
+        ],
+        "orientation" : {
+          "start" : {
+            "x" : 0.5,
+            "y" : 0
+          },
+          "stop" : {
+            "x" : 0.5,
+            "y" : 0.7
+          }
+        }
+      }
+    },
+    {
+      "appearance" : "dark",
+      "value" : {
+        "linear-gradient" : [
+          "display-p3:0.09836,0.08182,0.07930,1.00000",
+          "display-p3:0.13907,0.11879,0.11343,1.00000"
+        ],
+        "orientation" : {
+          "start" : {
+            "x" : 0.5,
+            "y" : 0
+          },
+          "stop" : {
+            "x" : 0.5,
+            "y" : 0.7
+          }
+        }
+      }
+    }
+  ],
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "fill-specializations" : [
+            {
+              "value" : {
+                "linear-gradient" : [
+                  "display-p3:0.29561,0.24552,0.23826,1.00000",
+                  "display-p3:0.03926,0.03297,0.02779,1.00000"
+                ],
+                "orientation" : {
+                  "start" : {
+                    "x" : 0.4999999999999995,
+                    "y" : 0.09286878845377464
+                  },
+                  "stop" : {
+                    "x" : 0.5687558504304396,
+                    "y" : 0.6087482241448605
+                  }
+                }
+              }
+            },
+            {
+              "appearance" : "dark",
+              "value" : {
+                "linear-gradient" : [
+                  "display-p3:0.19930,0.16553,0.16063,1.00000",
+                  "display-p3:0.03926,0.03297,0.02779,1.00000"
+                ],
+                "orientation" : {
+                  "start" : {
+                    "x" : 0.5,
+                    "y" : 0.2829835027247652
+                  },
+                  "stop" : {
+                    "x" : 0.5,
+                    "y" : 0.9114813287780267
+                  }
+                }
+              }
+            }
+          ],
+          "glass-specializations" : [
+            {
+              "value" : false
+            },
+            {
+              "appearance" : "dark",
+              "value" : false
+            }
+          ],
+          "image-name" : "pfeil2 2.png",
+          "name" : "pfeil2 2",
+          "position" : {
+            "scale" : 0.39,
+            "translation-in-points" : [
+              257.09000000000003,
+              249.2091166078663
+            ]
+          }
+        },
+        {
+          "blend-mode" : "normal",
+          "fill" : {
+            "linear-gradient" : [
+              "display-p3:0.36115,0.22615,0.21270,0.91454",
+              "display-p3:0.02310,0.01597,0.01473,1.00000"
+            ],
+            "orientation" : {
+              "start" : {
+                "x" : 0.45045488669286293,
+                "y" : 0.23147276858426186
+              },
+              "stop" : {
+                "x" : 0.5,
+                "y" : 0.711536490612246
+              }
+            }
+          },
+          "glass" : false,
+          "hidden" : true,
+          "image-name" : "pfeil.png",
+          "name" : "pfeil",
+          "position" : {
+            "scale" : 0.49,
+            "translation-in-points" : [
+              300,
+              176.25494607193096
+            ]
+          }
+        },
+        {
+          "blend-mode-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : "normal"
+            }
+          ],
+          "fill-specializations" : [
+            {
+              "value" : {
+                "linear-gradient" : [
+                  "display-p3:1.00000,0.96786,0.86656,1.00000",
+                  "display-p3:0.99237,0.66362,0.28325,0.89028"
+                ],
+                "orientation" : {
+                  "start" : {
+                    "x" : 0.2839240031514667,
+                    "y" : 0.1226281229436678
+                  },
+                  "stop" : {
+                    "x" : 0.7255098653635742,
+                    "y" : 0.5558671613220347
+                  }
+                }
+              }
+            },
+            {
+              "appearance" : "dark",
+              "value" : {
+                "linear-gradient" : [
+                  "display-p3:1.00000,0.91718,0.76548,1.00000",
+                  "display-p3:0.96611,0.57263,0.24969,1.00000"
+                ],
+                "orientation" : {
+                  "start" : {
+                    "x" : 0.3983811456716095,
+                    "y" : 0.07441829889964544
+                  },
+                  "stop" : {
+                    "x" : 0.721709207807279,
+                    "y" : 0.6119301301950671
+                  }
+                }
+              }
+            }
+          ],
+          "glass-specializations" : [
+            {
+              "value" : true
+            },
+            {
+              "appearance" : "dark",
+              "value" : true
+            }
+          ],
+          "hidden" : false,
+          "image-name" : "Bunny.net_idQLmpAvlY_1.png",
+          "name" : "Bunny.net_idQLmpAvlY_1",
+          "position" : {
+            "scale" : 0.99,
+            "translation-in-points" : [
+              -23.404997848321614,
+              -20.42939529664602
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}
