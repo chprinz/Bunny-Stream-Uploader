@@ -9,8 +9,8 @@ If it’s useful for you too, feel free to use it.
 
 ## Screenshots
 <p>
-  <img src=“screenshots/main.png" width="520" alt="Bunny Uploader main window">
-  <img src=“screenshots/settings.jpg" width="260" alt="Bunny Uploader settings">
+  <img src="screenshots/main.png" width="520" alt="Bunny Uploader main window">
+  <img src="screenshots/settings.jpg" width="260" alt="Bunny Uploader settings">
 </p>
 
 ## Quick start
