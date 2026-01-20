@@ -37,15 +37,17 @@ Scroll down to **For Developers**.
 
 ---
 
-## What you need
-- A Bunny Stream **AccessKey** for each library you want to use
+## Getting Started
 
-On first launch you’ll add:
-- **Library Name** (friendly label)
+On first launch you’ll add a new Library in the Settings:
+- **Library Name** (choose as you like)
 - **Library ID** (from Bunny Stream)
 - **AccessKey** (Stream API key)
+- **CDN Hostname** (Optional, for Thumbnail retrieval)
 
-Your keys are stored locally in **Keychain**.
+You can find all those in the Bunny Stream Library Settings > API.
+
+If you want to see the thumbnails in the UI you have to disable "Block direct url file access” in the Bunny Library > Security Settings.
 
 ---
 
