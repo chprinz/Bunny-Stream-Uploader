@@ -8,9 +8,10 @@ It also uses the TUS resumable upload protocol, which is great for unstable or s
 If it’s useful for you too, feel free to use it.
 
 ## Screenshots
-
-![Main window](screenshots/main.png)
-![Settings](screenshots/settings.jpg)
+<p>
+  <img src=“screenshots/main.png" width="520" alt="Bunny Uploader main window">
+  <img src=“screenshots/settings.jpg" width="260" alt="Bunny Uploader settings">
+</p>
 
 ## Quick start
 
