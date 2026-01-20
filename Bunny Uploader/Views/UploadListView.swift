@@ -163,10 +163,10 @@ struct UploadListView: View {
                     Text("This will remove the video from Bunny and from this list.")
                 }
             }
-            .onChange(of: showHistory) { newValue in
+            .onChange(of: showHistory) { _, newValue in
                 if newValue { syncHistoryWithRemote() }
             }
-            .onChange(of: selectedLibraryId) { _ in
+            .onChange(of: selectedLibraryId) { _, _ in
                 withAnimation { proxy.scrollTo(scrollAnchorID, anchor: .top) }
                 syncHistoryWithRemote()
             }

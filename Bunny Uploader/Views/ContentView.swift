@@ -130,7 +130,7 @@ struct ContentView: View {
                 store.saveLastSelectedLibrary(id: nil)
             }
         }
-        .onChange(of: selectedLibraryId) { newValue in
+        .onChange(of: selectedLibraryId) { _, newValue in
             if let libId = newValue,
                let lib = store.libraries.first(where: { $0.id == libId }) {
                 store.loadCollections(for: lib)

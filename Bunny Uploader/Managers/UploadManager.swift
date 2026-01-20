@@ -83,7 +83,6 @@ final class UploadManager: ObservableObject {
                 }
 
                 if connected && self.autoResumeUploads {
-                    let now = Date()
                     for i in self.items.indices {
                         if self.items[i].status == .paused {
                             if self.items[i].lastResumeAttempt != nil {
@@ -647,8 +646,13 @@ final class UploadManager: ObservableObject {
         }()
         let statusCode = raw["status"] as? Int
         let createdAt = parseRemoteDate(
-            (raw["dateUploaded"] as? String)
-            ?? (raw["dateCreated"] as? String)
+            raw["dateUploaded"]
+                ?? raw["dateCreated"]
+                ?? raw["uploadedAt"]
+                ?? raw["createdAt"]
+                ?? raw["uploadDate"]
+                ?? raw["uploaded"]
+                ?? raw["created"]
         )
         let durationSeconds: TimeInterval? = {
             if let v = raw["length"] as? Double { return v }
@@ -671,24 +675,65 @@ final class UploadManager: ObservableObject {
         )
     }
 
-    private func parseRemoteDate(_ raw: String?) -> Date? {
+    private func parseRemoteDate(_ raw: Any?) -> Date? {
         guard let raw else { return nil }
 
-        let isoWithFractional = ISO8601DateFormatter()
-        isoWithFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-        if let d = isoWithFractional.date(from: raw) {
-            return d
+        func normalize(_ seconds: Double) -> Date? {
+            guard seconds > 0 else { return nil }
+            // Treat pre-2000 timestamps as invalid; Bunny Stream did not exist then.
+            guard seconds > 946684800 else { return nil } // 2000-01-01
+            return Date(timeIntervalSince1970: seconds)
         }
 
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime]
-        if let d = iso.date(from: raw) {
-            return d
+        if let d = raw as? Date {
+            return normalize(d.timeIntervalSince1970)
         }
 
-        if let ts = TimeInterval(raw) {
-            return Date(timeIntervalSince1970: ts)
+        if let s = raw as? String {
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+
+            let isoWithFractional = ISO8601DateFormatter()
+            isoWithFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let d = isoWithFractional.date(from: trimmed) {
+                return normalize(d.timeIntervalSince1970)
+            }
+
+            let iso = ISO8601DateFormatter()
+            iso.formatOptions = [.withInternetDateTime]
+            if let d = iso.date(from: trimmed) {
+                return normalize(d.timeIntervalSince1970)
+            }
+
+            // Bunny sometimes omits timezone; assume UTC if absent
+            let customFormats = [
+                "yyyy-MM-dd'T'HH:mm:ss.SSSSSS",
+                "yyyy-MM-dd'T'HH:mm:ss.SSS",
+                "yyyy-MM-dd'T'HH:mm:ss"
+            ]
+            let df = DateFormatter()
+            df.locale = Locale(identifier: "en_US_POSIX")
+            df.timeZone = TimeZone(secondsFromGMT: 0)
+            for fmt in customFormats {
+                df.dateFormat = fmt
+                if let d = df.date(from: trimmed) {
+                    return normalize(d.timeIntervalSince1970)
+                }
+            }
+
+            if let ts = Double(trimmed) {
+                // Handle seconds, milliseconds, or .NET ticks (100ns)
+                if ts > 1e14 { return normalize(ts / 1e7) }
+                if ts > 1e11 { return normalize(ts / 1000) }
+                return normalize(ts)
+            }
+        }
+
+        if let num = raw as? NSNumber {
+            let ts = num.doubleValue
+            if ts > 1e14 { return normalize(ts / 1e7) }
+            if ts > 1e11 { return normalize(ts / 1000) }
+            return normalize(ts)
         }
 
         return nil
@@ -698,20 +743,29 @@ final class UploadManager: ObservableObject {
         let remoteMap = Dictionary(uniqueKeysWithValues: remoteVideos.map { ($0.videoId, $0) })
         let remoteIds = Set(remoteMap.keys)
 
+        func sanitized(_ date: Date?) -> Date? {
+            guard let d = date else { return nil }
+            // Bunny Stream started long after 2000; treat older epochs as invalid placeholders.
+            return d.timeIntervalSince1970 > 946684800 ? d : nil
+        }
+
         for idx in items.indices {
             guard items[idx].libraryConfigId == lib.id.uuidString,
                   let vid = items[idx].videoId,
                   let remote = remoteMap[vid] else { continue }
+
+            let remoteDate = remote.createdAt
+                ?? sanitized(items[idx].completedAt)
+                ?? sanitized(items[idx].createdAt)
+                ?? Date()
 
             items[idx].remoteTitle = remote.title
             items[idx].remoteThumbnailPath = remote.thumbnail
             items[idx].remoteStatusCode = remote.statusCode
             items[idx].remoteEncodeProgress = remote.encodeProgress
             items[idx].remoteDurationSeconds = remote.durationSeconds
-            if let date = remote.createdAt {
-                items[idx].completedAt = date
-                items[idx].createdAt = date
-            }
+            items[idx].completedAt = remoteDate
+            items[idx].createdAt = remoteDate
             if items[idx].status == .success {
                 items[idx].progress = 1.0
             }
@@ -732,7 +786,7 @@ final class UploadManager: ObservableObject {
             }
             if exists { continue }
 
-            let fallbackDate = remote.createdAt ?? Date(timeIntervalSince1970: 0)
+            let fallbackDate = remote.createdAt ?? Date()
             var newItem = UploadItem(
                 file: URL(fileURLWithPath: "/bunny/\(remote.videoId)"),
                 libraryConfigId: lib.id.uuidString,
