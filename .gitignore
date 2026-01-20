@@ -9,6 +9,7 @@ build/
 *.xcuserstate
 *.xcuserdatad/
 *.xcscmblueprint
+*.xcworkspace/xcuserdata/
 
 # SwiftPM
 .swiftpm/

@@ -1,6 +1,6 @@
 # Bunny Uploader
 
-A macOS SwiftUI app for uploading videos to Bunny Stream with persistent pause/resume, library sync, metadata edits, and thumbnail management.
+A macOS SwiftUI app for uploading videos to Bunny Stream with persistent pause/resume, library sync, title edit, and thumbnail upload.
 
 ## Requirements
 - macOS 13+ (tested on 14)
