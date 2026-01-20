@@ -1,0 +1,28 @@
+# macOS cruft
+.DS_Store
+
+# Xcode build outputs
+DerivedData/
+build/
+
+# Xcode user state
+*.xcuserstate
+*.xcuserdatad/
+*.xcscmblueprint
+
+# SwiftPM
+.swiftpm/
+.build/
+
+# App support / caches (avoid accidentally committing local data)
+Bunny Uploader.app/
+BunnyUploader.app/
+Bunny Uploader.build/
+BunnyUploader.build/
+BunnyUploader.xcodeproj/project.xcworkspace/xcuserdata/
+BunnyUploader.xcodeproj/xcuserdata/
+Uploads.json
+BunnyUploader_uploads.json
+
+# Logs
+*.log
