@@ -2,6 +2,11 @@
 
 A simple macOS app for uploading videos to Bunny Stream — with pause/resume, library sync, renaming, and custom thumbnails.
 
+I originally built this for myself after migrating my video production workflow from vimeo to Bunny. It speeds things up because I don’t have to constantly log into the dashboard and wait for it to load. 
+It also uses the TUS resumable upload protocol, which is great for unstable or slower networks.
+
+If it’s useful for you too, feel free to use it.
+
 ## Quick start
 
 ### Option A: Download the app (recommended)
@@ -22,7 +27,7 @@ If it’s still blocked:
 - **System Settings → Privacy & Security** → scroll down → **Open Anyway**
 
 ### Option B: Build it yourself (for developers)
-Scroll down to **Building & running**.
+Scroll down to **For Developers**.
 
 ---
 
@@ -53,15 +58,21 @@ Your keys are stored locally in **Keychain**.
   so the app can continue an interrupted transfer without recreating the video.
 - A Settings toggle enables auto-resume: paused uploads are moved back to pending on app launch or when the network reconnects; you can still resume/pause items individually.
 - Global controls let you pause/resume everything in one click; cancellations clean up the remote video when possible, while leaving successfully uploaded items untouched.
+- Keeps your Mac awake during uploads.
 
 ---
 
-## Requirements (building from source)
+
+---
+
+## For Developers (build from source)
+
+### Requirements
 - macOS 13+ (tested on macOS 15)
 - Xcode 15+
 - Bunny Stream AccessKey for each library you want to use
 
-## Setup (building from source)
+### Setup
 1) Clone the repo and open `Bunny Uploader.xcodeproj` in Xcode.
 2) Build & run. On first launch, add a Library in Settings with:
    - Name (friendly label)
@@ -69,11 +80,11 @@ Your keys are stored locally in **Keychain**.
    - AccessKey (Stream API key) — stored in Keychain, not in the repo
 3) Optional: set a pull zone host for thumbnails and a default collection.
 
-### Optional env vars
+#### Optional env vars
 Set these before launch if you prefer environment-based config:
 - `BUNNY_PULLZONE`, `BUNNY_PULL_ZONE`, or `BUNNY_PULLZONE_<LIBRARYID>` for CDN host
 - `BUNNY_TOKEN_<LIBRARYID>` for signed thumbnail token
 
-## Building & running (notes)
+### Building & running (notes)
 - Debug logging is guarded by `#if DEBUG` in `Services/APIService.swift`.
 - Release build: **Product → Archive**, then export the app (Organizer → Distribute App).
