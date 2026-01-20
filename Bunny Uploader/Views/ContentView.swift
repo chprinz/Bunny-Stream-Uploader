@@ -1,10 +1,12 @@
 import SwiftUI
+import AppKit
 
 struct ContentView: View {
     @EnvironmentObject private var store: LibraryStore
     @EnvironmentObject private var uploads: UploadManager
 
     @State private var selectedLibraryId: UUID?
+    @State private var didNormalizeWindow = false
 
     private var currentLibrary: LibraryConfig? {
         guard let sel = selectedLibraryId else { return nil }
@@ -95,6 +97,7 @@ struct ContentView: View {
         .frame(minWidth: 480, idealWidth: 540, maxWidth: 680,
                minHeight: 620, idealHeight: 700, maxHeight: 820)
         .onAppear {
+            normalizeWindowWidthIfNeeded()
             if let saved = store.loadLastSelectedLibrary(),
                store.libraries.contains(where: { $0.id == saved.id }) {
                 selectedLibraryId = saved.id
@@ -136,5 +139,28 @@ struct ContentView: View {
                 store.saveLastSelectedLibrary(id: nil)
             }
         }
+    }
+
+    // MARK: - Window sizing
+
+    private func normalizeWindowWidthIfNeeded() {
+        guard !didNormalizeWindow else { return }
+        guard let window = NSApp.windows.first(where: { $0.isKeyWindow }) ?? NSApp.mainWindow else { return }
+
+        let targetWidth: CGFloat = 680
+        let minWidth: CGFloat = 520
+        let current = window.frame
+        let clampedWidth = min(max(current.size.width, minWidth), targetWidth)
+        if abs(current.size.width - clampedWidth) < 1 {
+            didNormalizeWindow = true
+            return
+        }
+
+        let delta = current.size.width - clampedWidth
+        let newOrigin = NSPoint(x: current.origin.x + delta / 2, y: current.origin.y)
+        let newFrame = NSRect(x: newOrigin.x, y: newOrigin.y, width: clampedWidth, height: current.size.height)
+        window.setFrame(newFrame, display: true, animate: false)
+
+        didNormalizeWindow = true
     }
 }

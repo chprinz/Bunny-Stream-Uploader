@@ -28,6 +28,8 @@ struct UploadListView: View {
     @State private var lastFetchedTitle: String? = nil
     @State private var hoveredThumbId: UUID? = nil
     @State private var hoveredTitleId: UUID? = nil
+    @State private var isSyncingLibrary = false
+    @State private var scrollAnchorID = "top"
 
     private let recentSuccessWindow: TimeInterval = 2.5
 
@@ -51,13 +53,13 @@ struct UploadListView: View {
                 let isRecentSuccess = item.status == .success &&
                     (item.completedAt ?? item.createdAt) > Date().addingTimeInterval(-recentSuccessWindow)
                 return item.libraryConfigId == libId.uuidString &&
-                       (item.status == .success || item.status == .failed) &&
-                       !isRecentSuccess
+                    (item.status == .success || item.status == .failed) &&
+                    !isRecentSuccess
             } else {
                 return false
             }
         }
-        .sorted { (lhs, rhs) in
+        .sorted { lhs, rhs in
             let lDate = lhs.completedAt ?? lhs.createdAt
             let rDate = rhs.completedAt ?? rhs.createdAt
             return lDate > rDate
@@ -84,280 +86,287 @@ struct UploadListView: View {
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 16) {
-                if !activeItems.isEmpty {
-                    HStack {
-                        Text("Active uploads")
-                            .font(.headline)
-                        Spacer()
-                    }
-                }
-                ForEach(activeItems) { item in
-                    VStack(alignment: .leading, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(alignment: .center, spacing: 10) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(item.displayTitle)
-                                        .font(.subheadline.weight(.medium))
-                                        .lineLimit(1)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 16) {
+                    Color.clear.frame(height: 0.1).id(scrollAnchorID)
 
-                                    Text(statusLine(for: item))
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-
-                                Spacer()
-
-                                HStack(spacing: 10) {
-                                    statusPill(for: item)
-
-                                    if item.status != .success && item.status != .failed && item.status != .canceled {
-                                        HStack(spacing: 8) {
-                                            if item.status == .uploading {
-                                                controlButton(
-                                                    systemName: "pause.fill",
-                                                    action: { uploads.pause(itemId: item.id) },
-                                                    hint: "Pause upload"
-                                                )
-                                            } else if item.status == .paused {
-                                                controlButton(
-                                                    systemName: "play.fill",
-                                                    action: { uploads.resume(itemId: item.id) },
-                                                    hint: "Resume upload"
-                                                )
-                                            }
-
-                                            controlButton(
-                                                systemName: "xmark",
-                                                action: {
-                                                    if item.status == .uploading {
-                                                        pendingDeleteItem = item
-                                                        showDeleteAlert = true
-                                                    } else {
-                                                        uploads.cancel(itemId: item.id)
-                                                    }
-                                                },
-                                                hint: item.status == .success ? "Remove from list" : "Cancel / delete"
-                                            )
-                                            .disabled(item.videoId == nil && item.status != .success)
-                                            .opacity(item.videoId == nil && item.status != .success ? 0.3 : 1.0)
-                                        }
-                                    }
-                                }
-                            }
-
-                            if item.status == .success {
-                                if let vid = item.videoId {
-                                    Text(vid)
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                        .textSelection(.enabled)
-                                }
-                            } else {
-                                ProgressView(value: item.progress)
-                                    .progressViewStyle(.linear)
-                                    .frame(height: 8)
-                                    .tint(Color("AccentColor").opacity(0.85))
-                            }
-                        }
-                    }
-                    .padding(14)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.primary.opacity(0.035))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.primary.opacity(0.05), lineWidth: 1)
-                    )
-                }
-
-                // HISTORY TOGGLE
-                Button {
-                    withAnimation { showHistory.toggle() }
-                } label: {
-                    HStack {
-                        Image(systemName: showHistory ? "chevron.down" : "chevron.right")
-                        Text("History (\(historyItems.count))")
-                            .font(.headline)
-                        Spacer()
-                    }
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 20)
-
-                // HISTORY SECTION
-                if showHistory {
-                    ForEach(historySections, id: \.date) { section in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(section.title)
-                                .font(.caption.weight(.semibold))
-                                .foregroundColor(.secondary)
-
-                            ForEach(section.items) { item in
-                                HStack(alignment: .top, spacing: 10) {
-                                    thumbnailView(for: item)
-
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        if editingItemId == item.id {
-                                            VStack(alignment: .leading, spacing: 6) {
-                                                HStack(spacing: 8) {
-                                                    TextField("Title", text: $editTitle)
-                                                        .textFieldStyle(.roundedBorder)
-                                                        .frame(maxWidth: 260)
-                                                        .disabled(isSavingDetails)
-                                                    if isLoadingDetails || isSavingDetails {
-                                                        ProgressView().scaleEffect(0.7)
-                                                    }
-                                                }
-                                                HStack(spacing: 8) {
-                                                    Button("Cancel") {
-                                                        editingItemId = nil
-                                                        lastEditError = nil
-                                                        lastDetailsError = nil
-                                                    }
-                                                    Button("Save") {
-                                                        saveEdits(for: item)
-                                                    }
-                                                    .keyboardShortcut(.defaultAction)
-                                                    .disabled(isSavingDetails || editTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                                                }
-                                                if let error = lastEditError {
-                                                    Text(error)
-                                                        .font(.caption)
-                                                        .foregroundColor(.red)
-                                                }
-                                                if let warn = lastDetailsError {
-                                                    Text(warn)
-                                                        .font(.caption)
-                                                        .foregroundColor(.orange)
-                                                }
-                                            }
-                                        } else {
-                                            HStack(spacing: 6) {
-                                                Text(item.displayTitle)
-                                                    .font(.subheadline.weight(.medium))
-                                                    .lineLimit(1)
-
-                                                if hoveredTitleId == item.id, item.videoId != nil {
-                                                    Button {
-                                                        startEditing(item)
-                                                    } label: {
-                                                        Image(systemName: "pencil")
-                                                            .font(.system(size: 12, weight: .semibold))
-                                                    }
-                                                    .buttonStyle(.plain)
-                                                    .help("Edit title")
-                                                }
-                                            }
-                                            .onHover { hovering in
-                                                hoveredTitleId = hovering ? item.id : (hoveredTitleId == item.id ? nil : hoveredTitleId)
-                                            }
-                                        }
-
-                                        if let vid = item.videoId {
-                                            Text(vid)
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-                                                .textSelection(.enabled)
-                                        }
-
-                                        Text(completionLine(for: item))
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-
-                                    Spacer()
-
-                                    VStack(alignment: .trailing, spacing: 8) {
-                                        statusPill(for: item)
-
-                                        Menu {
-                                            if let url = playURL(for: item) {
-                                                Button("Copy play URL") { copyPlayURL(url) }
-                                            }
-
-                                            Button("Remove from history") {
-                                                uploads.removeFromHistory(itemId: item.id)
-                                            }
-
-                                            Button(role: .destructive) {
-                                                pendingRemoteDeleteItem = item
-                                                showRemoteDeleteAlert = true
-                                            } label: {
-                                                Text("Delete from Bunny")
-                                            }
-                                        } label: {
-                                            Image(systemName: "ellipsis.circle")
-                                                .foregroundColor(.secondary)
-                                                .font(.system(size: 16, weight: .semibold))
-                                                .padding(4)
-                                        }
-                                        .menuStyle(.borderlessButton)
-                                        .fixedSize()
-                                    }
-                                }
-                                .padding(12)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .fill(Color.primary.opacity(0.025))
-                                )
-                                .padding(.trailing, 6) // avoid scrollbar overlap
-                            }
+                    if !activeItems.isEmpty {
+                        HStack {
+                            Text("Active uploads")
+                                .font(.headline)
+                            Spacer()
                         }
                     }
 
-                    // CLEAR HISTORY BUTTON
-                    Button(role: .destructive) {
-                        for item in historyItems {
-                            uploads.removeFromHistory(itemId: item.id)
-                        }
+                    ForEach(activeItems) { item in
+                        activeUploadRow(for: item)
+                    }
+
+                    Button {
+                        withAnimation { showHistory.toggle() }
                     } label: {
-                        Text("Clear history")
+                        HStack {
+                            Image(systemName: showHistory ? "chevron.down" : "chevron.right")
+                            Text("Library (\(historyItems.count))")
+                                .font(.headline)
+                            if isSyncingLibrary {
+                                ProgressView().scaleEffect(0.65)
+                            }
+                            Spacer()
+                        }
                     }
-                    .padding(.top, 12)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 12)
-                }
-            }
-            .padding(.bottom, 20)
-        }
-        .padding(.horizontal, 16)
-        .alert("Upload is still running. Delete the video?",
-               isPresented: $showDeleteAlert) {
-            Button("Cancel", role: .cancel) { }
-            Button("Delete", role: .destructive) {
-                if let target = pendingDeleteItem {
-                    uploads.cancel(itemId: target.id)
-                }
-            }
-        }
-        .alert("Delete video from Bunny?", isPresented: $showRemoteDeleteAlert) {
-            Button("Cancel", role: .cancel) {
-                pendingRemoteDeleteItem = nil
-            }
-            Button("Delete", role: .destructive) {
-                if let target = pendingRemoteDeleteItem {
-                    uploads.deleteFromBunny(itemId: target.id) { _ in
-                        pendingRemoteDeleteItem = nil
+                    .buttonStyle(.plain)
+                    .padding(.top, 20)
+
+                    if showHistory {
+                        ForEach(historySections, id: \.date) { section in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(section.title)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundColor(.secondary)
+
+                                ForEach(section.items) { item in
+                                    historyRow(for: item)
+                                }
+                            }
+                        }
                     }
                 }
+                .padding(.bottom, 20)
             }
-        } message: {
-            if let vid = pendingRemoteDeleteItem?.videoId {
-                Text("This will remove the video (\(vid)) from Bunny and from your history.")
-            } else {
-                Text("This will remove the video from Bunny and from your history.")
+            .padding(.horizontal, 16)
+            .alert("Upload is still running. Delete the video?",
+                   isPresented: $showDeleteAlert) {
+                Button("Cancel", role: .cancel) { }
+                Button("Delete", role: .destructive) {
+                    if let target = pendingDeleteItem {
+                        uploads.cancel(itemId: target.id)
+                    }
+                }
             }
-        }
-        .onChange(of: showHistory) { newValue in
-            if newValue { syncHistoryWithRemote() }
-        }
-        .onAppear {
-            syncHistoryWithRemote()
+            .alert("Delete from Bunny library?", isPresented: $showRemoteDeleteAlert) {
+                Button("Cancel", role: .cancel) {
+                    pendingRemoteDeleteItem = nil
+                }
+                Button("Delete", role: .destructive) {
+                    if let target = pendingRemoteDeleteItem {
+                        uploads.deleteFromBunny(itemId: target.id) { _ in
+                            pendingRemoteDeleteItem = nil
+                        }
+                    }
+                }
+            } message: {
+                if let vid = pendingRemoteDeleteItem?.videoId {
+                    Text("This will remove the video (\(vid)) from Bunny and from this list.")
+                } else {
+                    Text("This will remove the video from Bunny and from this list.")
+                }
+            }
+            .onChange(of: showHistory) { newValue in
+                if newValue { syncHistoryWithRemote() }
+            }
+            .onChange(of: selectedLibraryId) { _ in
+                withAnimation { proxy.scrollTo(scrollAnchorID, anchor: .top) }
+                syncHistoryWithRemote()
+            }
+            .onAppear {
+                syncHistoryWithRemote()
+            }
         }
     }
+
+    // MARK: - Rows
+
+    private func activeUploadRow(for item: UploadItem) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .center, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.displayTitle)
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
+
+                        Text(statusLine(for: item))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+
+                    HStack(spacing: 10) {
+                        statusPill(for: item)
+
+                        if item.status != .success && item.status != .failed && item.status != .canceled {
+                            HStack(spacing: 8) {
+                                if item.status == .uploading {
+                                    controlButton(
+                                        systemName: "pause.fill",
+                                        action: { uploads.pause(itemId: item.id) },
+                                        hint: "Pause upload"
+                                    )
+                                } else if item.status == .paused {
+                                    controlButton(
+                                        systemName: "play.fill",
+                                        action: { uploads.resume(itemId: item.id) },
+                                        hint: "Resume upload"
+                                    )
+                                }
+
+                                controlButton(
+                                    systemName: "xmark",
+                                    action: {
+                                        if item.status == .uploading {
+                                            pendingDeleteItem = item
+                                            showDeleteAlert = true
+                                        } else {
+                                            uploads.cancel(itemId: item.id)
+                                        }
+                                    },
+                                    hint: item.status == .success ? "Remove from list" : "Cancel / delete"
+                                )
+                                .disabled(item.videoId == nil && item.status != .success)
+                                .opacity(item.videoId == nil && item.status != .success ? 0.3 : 1.0)
+                            }
+                        }
+                    }
+                }
+
+                if item.status == .success {
+                    if let vid = item.videoId {
+                        Text(vid)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .textSelection(.enabled)
+                    }
+                } else {
+                    ProgressView(value: item.progress)
+                        .progressViewStyle(.linear)
+                        .frame(height: 8)
+                        .tint(Color("AccentColor").opacity(0.85))
+                }
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.primary.opacity(0.035))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.primary.opacity(0.05), lineWidth: 1)
+        )
+    }
+
+    private func historyRow(for item: UploadItem) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            thumbnailView(for: item)
+
+            VStack(alignment: .leading, spacing: 6) {
+                if editingItemId == item.id {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            TextField("Title", text: $editTitle)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: 260)
+                                .disabled(isSavingDetails)
+                            if isLoadingDetails || isSavingDetails {
+                                ProgressView().scaleEffect(0.7)
+                            }
+                        }
+                        HStack(spacing: 8) {
+                            Button("Cancel") {
+                                editingItemId = nil
+                                lastEditError = nil
+                                lastDetailsError = nil
+                            }
+                            Button("Save") {
+                                saveEdits(for: item)
+                            }
+                            .keyboardShortcut(.defaultAction)
+                            .disabled(isSavingDetails || editTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                        if let error = lastEditError {
+                            Text(error)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                        }
+                        if let warn = lastDetailsError {
+                            Text(warn)
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+                    }
+                } else {
+                    HStack(spacing: 6) {
+                        Text(item.displayTitle)
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
+
+                        if hoveredTitleId == item.id, item.videoId != nil {
+                            Button {
+                                startEditing(item)
+                            } label: {
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Edit title")
+                        }
+                    }
+                    .onHover { hovering in
+                        hoveredTitleId = hovering ? item.id : (hoveredTitleId == item.id ? nil : hoveredTitleId)
+                    }
+                }
+
+                if let vid = item.videoId {
+                    Text(vid)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .textSelection(.enabled)
+                }
+
+                Text(completionLine(for: item))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 8) {
+                statusPill(for: item)
+
+                Menu {
+                    if let url = playURL(for: item) {
+                        Button("Copy play URL") { copyPlayURL(url) }
+                    }
+
+                    Button(role: .destructive) {
+                        pendingRemoteDeleteItem = item
+                        showRemoteDeleteAlert = true
+                    } label: {
+                        Text("Delete from Bunny library")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundColor(.secondary)
+                        .font(.system(size: 16, weight: .semibold))
+                        .padding(4)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.primary.opacity(0.025))
+        )
+        .padding(.trailing, 6) // avoid scrollbar overlap
+    }
+
+    // MARK: - URL helpers
 
     private func playURL(for item: UploadItem) -> URL? {
         guard let vid = item.videoId else { return nil }
@@ -403,6 +412,8 @@ struct UploadListView: View {
         url.appendPathComponent(cleaned)
         return url
     }
+
+    // MARK: - Edit helpers
 
     private func startEditing(_ item: UploadItem) {
         editingItemId = item.id
@@ -489,19 +500,6 @@ struct UploadListView: View {
         }
     }
 
-    private func statusText(_ s: UploadStatus) -> String { s.uiLabel }
-
-    private func statusLine(for item: UploadItem) -> String {
-        if item.status == .uploading {
-            return "\(Int(item.progress * 100))% · \(String(format: "%.1f", item.speedMBps)) MB/s · ETA \(item.etaFormatted)"
-        }
-        if isProcessing(item) {
-            let prog = item.remoteEncodeProgress.map { Int($0) } ?? 0
-            return "Processing on Bunny… (\(prog)%)"
-        }
-        return statusText(item.status)
-    }
-
     // MARK: - UI helpers
 
     @ViewBuilder
@@ -546,10 +544,23 @@ struct UploadListView: View {
         Button {
             pickThumbnail(for: item)
         } label: {
-            ZStack(alignment: .bottom) {
+            ZStack {
                 content
                     .frame(width: 96, height: 54)
                     .clipShape(shape)
+                    .overlay(alignment: .bottomLeading) {
+                        if let durationText = durationText(for: item.remoteDurationSeconds) {
+                            Text(durationText)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(
+                                    Capsule().fill(Color.black.opacity(0.55))
+                                )
+                                .padding(6)
+                        }
+                    }
 
                 if hoveredThumbId == item.id && item.videoId != nil {
                     shape
@@ -589,6 +600,19 @@ struct UploadListView: View {
         }
         .buttonStyle(.plain)
         .help(hint)
+    }
+
+    private func statusText(_ s: UploadStatus) -> String { s.uiLabel }
+
+    private func statusLine(for item: UploadItem) -> String {
+        if item.status == .uploading {
+            return "\(Int(item.progress * 100))% · \(String(format: "%.1f", item.speedMBps)) MB/s · ETA \(item.etaFormatted)"
+        }
+        if isProcessing(item) {
+            let prog = item.remoteEncodeProgress.map { Int($0) } ?? 0
+            return "Processing on Bunny… (\(prog)%)"
+        }
+        return statusText(item.status)
     }
 
     private func statusPill(for item: UploadItem) -> some View {
@@ -634,6 +658,18 @@ struct UploadListView: View {
         return "\(label) \(timestamp)"
     }
 
+    private func durationText(for seconds: TimeInterval?) -> String? {
+        guard let seconds, seconds > 0 else { return nil }
+        let total = Int(round(seconds))
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        if h > 0 {
+            return String(format: "%d:%02d:%02d", h, m, s)
+        }
+        return String(format: "%d:%02d", m, s)
+    }
+
     private func isProcessing(_ item: UploadItem) -> Bool {
         guard item.status == .success else { return false }
         if let prog = item.remoteEncodeProgress {
@@ -643,10 +679,14 @@ struct UploadListView: View {
     }
 
     private func syncHistoryWithRemote() {
-        // Refresh metadata and purge items deleted on Bunny
-        for item in historyItems {
-            guard item.videoId != nil else { continue }
-            uploads.refreshVideoDetails(itemId: item.id) { _ in }
+        guard let libId = selectedLibraryId,
+              let lib = store.libraries.first(where: { $0.id == libId }) else { return }
+
+        isSyncingLibrary = true
+        uploads.syncLibrary(lib) {
+            DispatchQueue.main.async {
+                isSyncingLibrary = false
+            }
         }
     }
 }

@@ -47,6 +47,7 @@ struct UploadItem: Identifiable, Codable {
     var remoteThumbnailPath: String? = nil
     var remoteStatusCode: Int? = nil
     var remoteEncodeProgress: Double? = nil
+    var remoteDurationSeconds: TimeInterval? = nil
     var processingReadyNotified: Bool = false
 
     // TUS Resume Support
@@ -104,7 +105,7 @@ struct UploadItem: Identifiable, Codable {
         case videoId, errorMessage
         case completedAt
         case remoteTitle, remoteDescription, remoteThumbnailPath
-        case remoteStatusCode, remoteEncodeProgress, processingReadyNotified
+        case remoteStatusCode, remoteEncodeProgress, remoteDurationSeconds, processingReadyNotified
         case tusUploadURL, bytesUploaded, totalBytes, lastResumeAttempt
     }
 
@@ -153,6 +154,7 @@ struct UploadItem: Identifiable, Codable {
         self.remoteThumbnailPath = try c.decodeIfPresent(String.self, forKey: .remoteThumbnailPath)
         self.remoteStatusCode = try c.decodeIfPresent(Int.self, forKey: .remoteStatusCode)
         self.remoteEncodeProgress = try c.decodeIfPresent(Double.self, forKey: .remoteEncodeProgress)
+        self.remoteDurationSeconds = try c.decodeIfPresent(TimeInterval.self, forKey: .remoteDurationSeconds)
         self.processingReadyNotified = try c.decodeIfPresent(Bool.self, forKey: .processingReadyNotified) ?? false
 
         self.tusUploadURL = try c.decodeIfPresent(URL.self, forKey: .tusUploadURL)
@@ -185,6 +187,7 @@ struct UploadItem: Identifiable, Codable {
         try c.encodeIfPresent(remoteThumbnailPath, forKey: .remoteThumbnailPath)
         try c.encodeIfPresent(remoteStatusCode, forKey: .remoteStatusCode)
         try c.encodeIfPresent(remoteEncodeProgress, forKey: .remoteEncodeProgress)
+        try c.encodeIfPresent(remoteDurationSeconds, forKey: .remoteDurationSeconds)
         try c.encode(processingReadyNotified, forKey: .processingReadyNotified)
 
         try c.encodeIfPresent(tusUploadURL, forKey: .tusUploadURL)

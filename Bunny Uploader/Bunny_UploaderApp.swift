@@ -22,6 +22,7 @@ struct Bunny_UploaderApp: App {
                 .environmentObject(store)
                 .environmentObject(uploads)
         }
+        .defaultSize(width: 640, height: 760)
 
         Settings {
             SettingsView()

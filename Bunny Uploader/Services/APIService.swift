@@ -97,7 +97,7 @@ final class APIService {
         perPage: Int,
         completion: @escaping (Int, [String: Any]?) -> Void
     ) {
-        guard let url = URL(string: "https://video.bunnycdn.com/library/\(libraryId)/videos?page=\(page)&itemsPerPage=\(perPage)&orderBy=date") else {
+        guard let url = URL(string: "https://video.bunnycdn.com/library/\(libraryId)/videos?page=\(page)&itemsPerPage=\(perPage)&orderBy=dateUploaded&orderDir=desc") else {
             completion(-1, nil)
             return
         }

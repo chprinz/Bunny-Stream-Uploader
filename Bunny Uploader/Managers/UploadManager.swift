@@ -37,6 +37,7 @@ final class UploadManager: ObservableObject {
         let encodeProgress: Double?
         let statusCode: Int?
         let createdAt: Date?
+        let durationSeconds: TimeInterval?
     }
 
     private var persistenceURL: URL {
@@ -497,6 +498,15 @@ final class UploadManager: ObservableObject {
                 if let p = json["encodeProgress"] as? Int { return Double(p) }
                 return nil
             }()
+            let durationSeconds: TimeInterval? = {
+                if let v = json["length"] as? Double { return v }
+                if let v = json["length"] as? Int { return Double(v) }
+                if let v = json["duration"] as? Double { return v }
+                if let v = json["duration"] as? Int { return Double(v) }
+                if let v = json["videoDuration"] as? Double { return v }
+                if let v = json["videoDuration"] as? Int { return Double(v) }
+                return nil
+            }()
 
             DispatchQueue.main.async {
                 if let i = self.items.firstIndex(where: { $0.id == itemId }) {
@@ -505,6 +515,7 @@ final class UploadManager: ObservableObject {
                     self.items[i].remoteThumbnailPath = thumb
                     self.items[i].remoteStatusCode = remoteStatus
                     self.items[i].remoteEncodeProgress = encodeProgress
+                    self.items[i].remoteDurationSeconds = durationSeconds
                     if let prog = encodeProgress, prog >= 100, !self.items[i].processingReadyNotified {
                         self.items[i].processingReadyNotified = true
                         self.persistItems()
@@ -572,6 +583,175 @@ final class UploadManager: ObservableObject {
                 }
                 completion(ok)
             }
+        }
+    }
+
+    // MARK: - Library sync (remote → local history)
+
+    func syncLibrary(_ lib: LibraryConfig, completion: (() -> Void)? = nil) {
+        guard let apiKey = store.apiKey(for: lib) else {
+            completion?()
+            return
+        }
+
+        let api = APIService(streamKey: apiKey)
+        let perPage = 100
+        var collected: [[String: Any]] = []
+
+        func fetch(page: Int) {
+            api.fetchLibraryVideos(libraryId: lib.libraryId, page: page, perPage: perPage) { [weak self] status, json in
+                guard let self else { return }
+                guard status < 300, let json else {
+                    DispatchQueue.main.async { completion?() }
+                    return
+                }
+
+                let items = (json["items"] as? [[String: Any]]) ?? []
+                collected.append(contentsOf: items)
+
+                let totalItems = json["totalItems"] as? Int ?? collected.count
+                let itemsPerPage = json["itemsPerPage"] as? Int ?? perPage
+                let currentPage = json["currentPage"] as? Int ?? page
+                let totalPages = Int(ceil(Double(totalItems) / Double(max(itemsPerPage, 1))))
+
+                if currentPage < totalPages {
+                    fetch(page: currentPage + 1)
+                } else {
+                    let parsed = collected.compactMap(self.parseRemoteVideo)
+                    DispatchQueue.main.async {
+                        self.mergeLibrary(lib: lib, remoteVideos: parsed)
+                        self.persistItems()
+                        completion?()
+                    }
+                }
+            }
+        }
+
+        fetch(page: 1)
+    }
+
+    private func parseRemoteVideo(_ raw: [String: Any]) -> RemoteVideoSummary? {
+        guard let guid = raw["guid"] as? String else { return nil }
+        let title = raw["title"] as? String
+        let thumb = (raw["thumbnailFileName"] as? String)
+            ?? (raw["thumbnailFilename"] as? String)
+            ?? (raw["thumbnail"] as? String)
+            ?? (raw["thumbnailUrl"] as? String)
+            ?? (raw["thumbnailURL"] as? String)
+        let encodeProgress: Double? = {
+            if let p = raw["encodeProgress"] as? Double { return p }
+            if let p = raw["encodeProgress"] as? Int { return Double(p) }
+            if let p = raw["processingPercentage"] as? Double { return p }
+            if let p = raw["processingPercentage"] as? Int { return Double(p) }
+            return nil
+        }()
+        let statusCode = raw["status"] as? Int
+        let createdAt = parseRemoteDate(
+            (raw["dateUploaded"] as? String)
+            ?? (raw["dateCreated"] as? String)
+        )
+        let durationSeconds: TimeInterval? = {
+            if let v = raw["length"] as? Double { return v }
+            if let v = raw["length"] as? Int { return Double(v) }
+            if let v = raw["duration"] as? Double { return v }
+            if let v = raw["duration"] as? Int { return Double(v) }
+            if let v = raw["videoDuration"] as? Double { return v }
+            if let v = raw["videoDuration"] as? Int { return Double(v) }
+            return nil
+        }()
+
+        return RemoteVideoSummary(
+            videoId: guid,
+            title: title,
+            thumbnail: thumb,
+            encodeProgress: encodeProgress,
+            statusCode: statusCode,
+            createdAt: createdAt,
+            durationSeconds: durationSeconds
+        )
+    }
+
+    private func parseRemoteDate(_ raw: String?) -> Date? {
+        guard let raw else { return nil }
+
+        let isoWithFractional = ISO8601DateFormatter()
+        isoWithFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        if let d = isoWithFractional.date(from: raw) {
+            return d
+        }
+
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        if let d = iso.date(from: raw) {
+            return d
+        }
+
+        if let ts = TimeInterval(raw) {
+            return Date(timeIntervalSince1970: ts)
+        }
+
+        return nil
+    }
+
+    private func mergeLibrary(lib: LibraryConfig, remoteVideos: [RemoteVideoSummary]) {
+        let remoteMap = Dictionary(uniqueKeysWithValues: remoteVideos.map { ($0.videoId, $0) })
+        let remoteIds = Set(remoteMap.keys)
+
+        for idx in items.indices {
+            guard items[idx].libraryConfigId == lib.id.uuidString,
+                  let vid = items[idx].videoId,
+                  let remote = remoteMap[vid] else { continue }
+
+            items[idx].remoteTitle = remote.title
+            items[idx].remoteThumbnailPath = remote.thumbnail
+            items[idx].remoteStatusCode = remote.statusCode
+            items[idx].remoteEncodeProgress = remote.encodeProgress
+            items[idx].remoteDurationSeconds = remote.durationSeconds
+            if let date = remote.createdAt {
+                items[idx].completedAt = date
+                items[idx].createdAt = date
+            }
+            if items[idx].status == .success {
+                items[idx].progress = 1.0
+            }
+        }
+
+        // Remove finished items that no longer exist remotely
+        items.removeAll { item in
+            guard item.libraryConfigId == lib.id.uuidString else { return false }
+            if item.status == .uploading || item.status == .pending || item.status == .paused { return false }
+            guard let vid = item.videoId else { return false }
+            return !remoteIds.contains(vid)
+        }
+
+        // Add any videos that exist on Bunny but not locally yet
+        for remote in remoteVideos {
+            let exists = items.contains {
+                $0.videoId == remote.videoId && $0.libraryConfigId == lib.id.uuidString
+            }
+            if exists { continue }
+
+            let fallbackDate = remote.createdAt ?? Date(timeIntervalSince1970: 0)
+            var newItem = UploadItem(
+                file: URL(fileURLWithPath: "/bunny/\(remote.videoId)"),
+                libraryConfigId: lib.id.uuidString,
+                libraryId: lib.libraryId,
+                collectionId: nil,
+                status: .success,
+                progress: 1.0,
+                speedMBps: 0,
+                etaSeconds: 0,
+                videoId: remote.videoId,
+                completedAt: remote.createdAt ?? fallbackDate
+            )
+            newItem.remoteTitle = remote.title
+            newItem.remoteThumbnailPath = remote.thumbnail
+            newItem.remoteStatusCode = remote.statusCode
+            newItem.remoteEncodeProgress = remote.encodeProgress
+            newItem.remoteDurationSeconds = remote.durationSeconds
+            newItem.createdAt = remote.createdAt ?? fallbackDate
+            items.append(newItem)
         }
     }
 
