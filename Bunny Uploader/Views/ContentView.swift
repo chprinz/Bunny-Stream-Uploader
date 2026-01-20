@@ -92,8 +92,8 @@ struct ContentView: View {
             .frame(maxWidth: .infinity)
             .background(Color(NSColor.windowBackgroundColor))
         }
-        .frame(minWidth: 450, idealWidth: 500, maxWidth: 640,
-               minHeight: 600, idealHeight: 660, maxHeight: 800)
+        .frame(minWidth: 480, idealWidth: 540, maxWidth: 680,
+               minHeight: 620, idealHeight: 700, maxHeight: 820)
         .onAppear {
             if let saved = store.loadLastSelectedLibrary(),
                store.libraries.contains(where: { $0.id == saved.id }) {

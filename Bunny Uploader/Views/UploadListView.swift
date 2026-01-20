@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 
 struct UploadListView: View {
     let selectedLibraryId: UUID?
+    @EnvironmentObject private var store: LibraryStore
     @EnvironmentObject private var uploads: UploadManager
     @State private var showDeleteAlert = false
     @State private var pendingDeleteItem: UploadItem? = nil
@@ -25,6 +26,8 @@ struct UploadListView: View {
     @State private var lastEditError: String? = nil
     @State private var lastDetailsError: String? = nil
     @State private var lastFetchedTitle: String? = nil
+    @State private var hoveredThumbId: UUID? = nil
+    @State private var hoveredTitleId: UUID? = nil
 
     private let recentSuccessWindow: TimeInterval = 2.5
 
@@ -146,7 +149,7 @@ struct UploadListView: View {
 
                             if item.status == .success {
                                 if let vid = item.videoId {
-                                    Text("Video ID: \(vid)")
+                                    Text(vid)
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                         .textSelection(.enabled)
@@ -194,13 +197,67 @@ struct UploadListView: View {
 
                             ForEach(section.items) { item in
                                 HStack(alignment: .top, spacing: 10) {
+                                    thumbnailView(for: item)
+
                                     VStack(alignment: .leading, spacing: 6) {
-                                        Text(item.displayTitle)
-                                            .font(.subheadline.weight(.medium))
-                                            .lineLimit(1)
+                                        if editingItemId == item.id {
+                                            VStack(alignment: .leading, spacing: 6) {
+                                                HStack(spacing: 8) {
+                                                    TextField("Title", text: $editTitle)
+                                                        .textFieldStyle(.roundedBorder)
+                                                        .frame(maxWidth: 260)
+                                                        .disabled(isSavingDetails)
+                                                    if isLoadingDetails || isSavingDetails {
+                                                        ProgressView().scaleEffect(0.7)
+                                                    }
+                                                }
+                                                HStack(spacing: 8) {
+                                                    Button("Cancel") {
+                                                        editingItemId = nil
+                                                        lastEditError = nil
+                                                        lastDetailsError = nil
+                                                    }
+                                                    Button("Save") {
+                                                        saveEdits(for: item)
+                                                    }
+                                                    .keyboardShortcut(.defaultAction)
+                                                    .disabled(isSavingDetails || editTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                                }
+                                                if let error = lastEditError {
+                                                    Text(error)
+                                                        .font(.caption)
+                                                        .foregroundColor(.red)
+                                                }
+                                                if let warn = lastDetailsError {
+                                                    Text(warn)
+                                                        .font(.caption)
+                                                        .foregroundColor(.orange)
+                                                }
+                                            }
+                                        } else {
+                                            HStack(spacing: 6) {
+                                                Text(item.displayTitle)
+                                                    .font(.subheadline.weight(.medium))
+                                                    .lineLimit(1)
+
+                                                if hoveredTitleId == item.id, item.videoId != nil {
+                                                    Button {
+                                                        startEditing(item)
+                                                    } label: {
+                                                        Image(systemName: "pencil")
+                                                            .font(.system(size: 12, weight: .semibold))
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                    .help("Edit title")
+                                                }
+                                            }
+                                            .onHover { hovering in
+                                                hoveredTitleId = hovering ? item.id : (hoveredTitleId == item.id ? nil : hoveredTitleId)
+                                            }
+                                        }
 
                                         if let vid = item.videoId {
-                                            Text("Video ID: \(vid)")
+                                            Text(vid)
                                                 .font(.caption2)
                                                 .foregroundColor(.secondary)
                                                 .textSelection(.enabled)
@@ -217,9 +274,6 @@ struct UploadListView: View {
                                         statusPill(for: item)
 
                                         Menu {
-                                            Button("Edit details…") { startEditing(item) }
-                                                .disabled(item.videoId == nil)
-
                                             if let url = playURL(for: item) {
                                                 Button("Copy play URL") { copyPlayURL(url) }
                                             }
@@ -297,31 +351,6 @@ struct UploadListView: View {
                 Text("This will remove the video from Bunny and from your history.")
             }
         }
-        .sheet(isPresented: Binding(
-            get: { editingItemId != nil },
-            set: { newValue in
-                if !newValue { editingItemId = nil }
-            })
-        ) {
-            if let editId = editingItemId,
-               let item = uploads.items.first(where: { $0.id == editId }) {
-                EditDetailsSheet(
-                    item: item,
-                    title: $editTitle,
-                    isLoading: $isLoadingDetails,
-                    isSaving: $isSavingDetails,
-                    isUploadingThumb: $isUploadingThumbnail,
-                    errorMessage: $lastEditError,
-                    detailsError: $lastDetailsError,
-                    onSave: { saveEdits(for: item) },
-                    onPickThumbnail: { pickThumbnail(for: item) },
-                    onCancel: { editingItemId = nil }
-                )
-            } else {
-                Text("No item selected.")
-                    .frame(minWidth: 320, minHeight: 200)
-            }
-        }
         .onChange(of: showHistory) { newValue in
             if newValue { syncHistoryWithRemote() }
         }
@@ -339,6 +368,40 @@ struct UploadListView: View {
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(url.absoluteString, forType: .string)
+    }
+
+    private func library(for item: UploadItem) -> LibraryConfig? {
+        store.libraries.first(where: { $0.id.uuidString == item.libraryConfigId })
+    }
+
+    private func thumbnailURL(for item: UploadItem) -> URL? {
+        guard item.status == .success,
+              let raw = item.remoteThumbnailPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else { return nil }
+
+        if let direct = URL(string: raw), direct.scheme != nil {
+            return direct
+        }
+
+        guard let videoId = item.videoId else { return nil }
+        guard let lib = library(for: item),
+              let base = store.thumbnailBaseURL(for: lib) else { return nil }
+
+        let cleaned = raw.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !cleaned.isEmpty else { return nil }
+
+        var url = base
+        let components = cleaned.split(separator: "/")
+        if components.count > 1 {
+            for comp in components {
+                url.appendPathComponent(String(comp))
+            }
+            return url
+        }
+
+        url.appendPathComponent(videoId)
+        url.appendPathComponent(cleaned)
+        return url
     }
 
     private func startEditing(_ item: UploadItem) {
@@ -441,6 +504,76 @@ struct UploadListView: View {
 
     // MARK: - UI helpers
 
+    @ViewBuilder
+    private func thumbnailView(for item: UploadItem) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
+        let content: some View = Group {
+            if let url = thumbnailURL(for: item) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    case .empty:
+                        ZStack {
+                            shape.fill(Color.primary.opacity(0.05))
+                            ProgressView().scaleEffect(0.6)
+                        }
+                    case .failure:
+                        shape
+                            .fill(Color.primary.opacity(0.05))
+                            .overlay(
+                                Image(systemName: "video.slash")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(.secondary.opacity(0.6))
+                            )
+                    @unknown default:
+                        shape.fill(Color.primary.opacity(0.05))
+                    }
+                }
+            } else {
+                shape
+                    .fill(Color.primary.opacity(0.05))
+                    .overlay(
+                        Image(systemName: "photo")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.secondary.opacity(0.55))
+                    )
+            }
+        }
+
+        Button {
+            pickThumbnail(for: item)
+        } label: {
+            ZStack(alignment: .bottom) {
+                content
+                    .frame(width: 96, height: 54)
+                    .clipShape(shape)
+
+                if hoveredThumbId == item.id && item.videoId != nil {
+                    shape
+                        .fill(Color.black.opacity(0.25))
+                        .frame(width: 96, height: 54)
+                        .overlay(
+                            Label("Change", systemImage: "photo.on.rectangle")
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 4)
+                        )
+                        .clipShape(shape)
+                        .transition(.opacity)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            hoveredThumbId = hovering ? item.id : (hoveredThumbId == item.id ? nil : hoveredThumbId)
+        }
+        .disabled(item.videoId == nil)
+    }
+
     private func controlButton(systemName: String, action: @escaping () -> Void, hint: String) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
@@ -515,93 +648,5 @@ struct UploadListView: View {
             guard item.videoId != nil else { continue }
             uploads.refreshVideoDetails(itemId: item.id) { _ in }
         }
-    }
-}
-
-// MARK: - Edit Sheet
-
-private struct EditDetailsSheet: View {
-    let item: UploadItem
-    @Binding var title: String
-    @Binding var isLoading: Bool
-    @Binding var isSaving: Bool
-    @Binding var isUploadingThumb: Bool
-    @Binding var errorMessage: String?
-    @Binding var detailsError: String?
-    let onSave: () -> Void
-    let onPickThumbnail: () -> Void
-    let onCancel: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("Edit video")
-                    .font(.headline)
-                Spacer()
-                if isLoading {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Title")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                TextField("Title", text: $title)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("Thumbnail")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    if isUploadingThumb {
-                        ProgressView()
-                            .scaleEffect(0.7)
-                    }
-                }
-
-                Button {
-                    onPickThumbnail()
-                } label: {
-                    Label("Upload custom thumbnail", systemImage: "photo.on.rectangle")
-                }
-                .disabled(isUploadingThumb)
-
-                Text("Preview not available. Upload replaces current thumbnail.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            if let error = errorMessage {
-                Text(error)
-                    .font(.caption)
-                    .foregroundColor(.red)
-            }
-            if let warn = detailsError {
-                Text(warn)
-                    .font(.caption)
-                    .foregroundColor(.orange)
-            }
-
-            HStack {
-                Button("Cancel") {
-                    onCancel()
-                }
-                .keyboardShortcut(.cancelAction)
-
-                Spacer()
-                Button("Save") {
-                    onSave()
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(isSaving || title.isEmpty)
-            }
-        }
-        .padding(20)
-        .frame(minWidth: 420)
     }
 }

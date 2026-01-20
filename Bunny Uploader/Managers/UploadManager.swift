@@ -30,6 +30,15 @@ final class UploadManager: ObservableObject {
     private var sleepAssertionID: IOPMAssertionID = 0
     private var sleepAssertionActive = false
 
+    private struct RemoteVideoSummary {
+        let videoId: String
+        let title: String?
+        let thumbnail: String?
+        let encodeProgress: Double?
+        let statusCode: Int?
+        let createdAt: Date?
+    }
+
     private var persistenceURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let appDir = dir.appendingPathComponent("BunnyUploader", isDirectory: true)

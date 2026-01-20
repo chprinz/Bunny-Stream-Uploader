@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var nameCache: String = ""
     @State private var apiKeyCache: String = ""
     @State private var selectedCollection: String = ""
+    @State private var pullZoneHostCache: String = ""
 
     @AppStorage("autoResumeUploads") private var autoResumeUploads: Bool = true
 
@@ -154,6 +155,28 @@ struct SettingsView: View {
                         .frame(maxWidth: .infinity)
                     }
 
+                    // Pull Zone Host
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("CDN Host (pull zone)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.secondary)
+
+                        TextField("vz-xxxx.b-cdn.net", text: Binding(
+                            get: { pullZoneHostCache },
+                            set: { newVal in
+                                pullZoneHostCache = newVal
+                                let trimmed = newVal.trimmingCharacters(in: .whitespacesAndNewlines)
+                                store.setPullZoneHost(for: lib, host: trimmed.isEmpty ? nil : trimmed)
+                            }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: .infinity)
+
+                        Text("Optional. Use your pull zone host, e.g. vz-12345.b-cdn.net")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+
                     // Default Collection (Dropdown)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Default Collection")
@@ -289,6 +312,7 @@ struct SettingsView: View {
         nameCache = lib.name
         apiKeyCache = store.apiKey(for: lib) ?? ""
         selectedCollection = store.defaultCollection(for: lib) ?? ""
+        pullZoneHostCache = lib.pullZoneHost ?? ""
         store.loadCollections(for: lib)
     }
 

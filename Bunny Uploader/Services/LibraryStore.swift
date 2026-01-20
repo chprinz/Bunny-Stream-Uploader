@@ -55,6 +55,52 @@ private let lastLibraryKey = "LastSelectedLibrary_v1"
         KeychainService.load(key: lib.id.uuidString)
     }
 
+    // Optional: base CDN hostname for thumbnails (pull zone)
+    func thumbnailBaseURL(for lib: LibraryConfig) -> URL? {
+        let env = ProcessInfo.processInfo.environment
+        let candidates: [String?] = [
+            lib.pullZoneHost,
+            env["BUNNY_PULLZONE_\(lib.libraryId)"],
+            env["BUNNY_PULL_ZONE_\(lib.libraryId)"],
+            env["BUNNY_PULLZONE"],
+            env["BUNNY_PULL_ZONE"],
+            KeychainService.load(key: lib.id.uuidString + ":pullZoneHost"),
+            // Fallback to default Bunny host naming (vz-LIBRARYID.b-cdn.net)
+            "vz-\(lib.libraryId).b-cdn.net"
+        ]
+
+        for raw in candidates {
+            if let url = normalizePullZone(raw) {
+                return url
+            }
+        }
+        return nil
+    }
+
+    func setPullZoneHost(for lib: LibraryConfig, host: String?) {
+        guard let idx = libraries.firstIndex(where: { $0.id == lib.id }) else { return }
+        let trimmed = host?.trimmingCharacters(in: .whitespacesAndNewlines)
+        libraries[idx].pullZoneHost = trimmed?.isEmpty == true ? nil : trimmed
+        save()
+    }
+
+    private func normalizePullZone(_ raw: String?) -> URL? {
+        guard var value = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+
+        value = value.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        // If a zone name is provided (no dots), append Bunny CDN domain
+        if !value.contains(".") && !value.hasPrefix("http://") && !value.hasPrefix("https://") {
+            value += ".b-cdn.net"
+        }
+
+        if value.hasPrefix("http://") || value.hasPrefix("https://") {
+            return URL(string: value)
+        }
+        return URL(string: "https://\(value)")
+    }
+
     // Optional: token auth key for signed CDN URLs (read from Keychain or env)
     func tokenAuthKey(for lib: LibraryConfig) -> String? {
         let envKey = "BUNNY_TOKEN_\(lib.libraryId)"

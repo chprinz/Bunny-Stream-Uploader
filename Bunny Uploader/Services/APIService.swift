@@ -90,6 +90,35 @@ final class APIService {
         }.resume()
     }
 
+    // Fetch paginated video list (library browse)
+    func fetchLibraryVideos(
+        libraryId: String,
+        page: Int,
+        perPage: Int,
+        completion: @escaping (Int, [String: Any]?) -> Void
+    ) {
+        guard let url = URL(string: "https://video.bunnycdn.com/library/\(libraryId)/videos?page=\(page)&itemsPerPage=\(perPage)&orderBy=date") else {
+            completion(-1, nil)
+            return
+        }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue(streamKey, forHTTPHeaderField: "AccessKey")
+
+        session.dataTask(with: req) { data, resp, error in
+            self.logResponse("fetchLibraryVideos", data: data, response: resp, error: error)
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+            guard let data, error == nil else {
+                completion(status, nil)
+                return
+            }
+
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            completion(status, json)
+        }.resume()
+    }
+
     // Delete a Video
     func deleteVideo(
         libraryId: String,

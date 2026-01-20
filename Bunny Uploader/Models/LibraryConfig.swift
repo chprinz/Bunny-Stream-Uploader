@@ -11,4 +11,5 @@ struct LibraryConfig: Identifiable, Codable, Hashable {
     let id: UUID
     var name: String
     var libraryId: String
+    var pullZoneHost: String? = nil
 }
