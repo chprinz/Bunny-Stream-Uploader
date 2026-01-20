@@ -34,7 +34,7 @@ On first launch you’ll add:
 - **Library ID** (from Bunny Stream)
 - **AccessKey** (Stream API key)
 
-Your keys are stored locally in **Keychain** (not in this repo).
+Your keys are stored locally in **Keychain**.
 
 ---
 
@@ -44,7 +44,6 @@ Your keys are stored locally in **Keychain** (not in this repo).
 - Library sync (pulls remote videos, dates, thumbnails, status)
 - Edit titles, upload thumbnails, copy embed URL
 - Delete locally or from Bunny
-- Keeps the Mac awake during active uploads (toggle in Settings)
 
 ---
 
