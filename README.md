@@ -3,7 +3,7 @@
 A macOS SwiftUI app for uploading videos to Bunny Stream with persistent pause/resume, library sync, title edit, and thumbnail upload.
 
 ## Requirements
-- macOS 13+ (tested on 14)
+- macOS 13+ (tested on 15)
 - Xcode 15+
 - Bunny Stream AccessKey for each library you want to use
 
@@ -36,14 +36,3 @@ Set these before launch if you prefer environment-based config:
 ## Building & running
 - Debug logging is guarded by `#if DEBUG` in `Services/APIService.swift`.
 - Release build: Product > Archive, then export signed/notarized if distributing binaries.
-
-## Distribution options
-- **Source**: Publish this repo to GitHub; others build in Xcode.
-- **Binary**: Archive a Release build, sign with your Developer ID, notarize, and zip/DMG the app. Attach to a GitHub Release with a short first-run note about adding a library and AccessKey.
-- **Auto-updates (optional)**: Integrate Sparkle if you want update feeds; not included here.
-
-## Contributing
-Issues and PRs welcome. Keep API keys out of code; use Keychain/env. Avoid committing DerivedData, build products, and local upload history.
-
-## License
-MIT — see `LICENSE`.
