@@ -55,6 +55,7 @@ struct UploadItem: Identifiable, Codable {
     var bytesUploaded: Int64 = 0
     var totalBytes: Int64 = 0
     var lastResumeAttempt: Date? = nil
+    var lastProgressAt: Date? = nil
     
     init(
         file: URL,
@@ -94,6 +95,7 @@ struct UploadItem: Identifiable, Codable {
         self.bytesUploaded = 0
         self.totalBytes = 0
         self.lastResumeAttempt = nil
+        self.lastProgressAt = nil
     }
     
     // Custom decoder to migrate legacy UUID fields to String
@@ -106,7 +108,7 @@ struct UploadItem: Identifiable, Codable {
         case completedAt
         case remoteTitle, remoteDescription, remoteThumbnailPath
         case remoteStatusCode, remoteEncodeProgress, remoteDurationSeconds, processingReadyNotified
-        case tusUploadURL, bytesUploaded, totalBytes, lastResumeAttempt
+        case tusUploadURL, bytesUploaded, totalBytes, lastResumeAttempt, lastProgressAt
     }
 
     init(from decoder: Decoder) throws {
@@ -161,6 +163,7 @@ struct UploadItem: Identifiable, Codable {
         self.bytesUploaded = try c.decodeIfPresent(Int64.self, forKey: .bytesUploaded) ?? 0
         self.totalBytes = try c.decodeIfPresent(Int64.self, forKey: .totalBytes) ?? 0
         self.lastResumeAttempt = try c.decodeIfPresent(Date.self, forKey: .lastResumeAttempt)
+        self.lastProgressAt = try c.decodeIfPresent(Date.self, forKey: .lastProgressAt)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -194,6 +197,7 @@ struct UploadItem: Identifiable, Codable {
         try c.encode(bytesUploaded, forKey: .bytesUploaded)
         try c.encode(totalBytes, forKey: .totalBytes)
         try c.encodeIfPresent(lastResumeAttempt, forKey: .lastResumeAttempt)
+        try c.encodeIfPresent(lastProgressAt, forKey: .lastProgressAt)
     }
 
     // make ETA readable

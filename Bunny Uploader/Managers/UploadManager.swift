@@ -19,6 +19,7 @@ final class UploadManager: ObservableObject {
     private let store: LibraryStore
     private let network = NetworkMonitor()
     private var cancellables = Set<AnyCancellable>()
+    private let telemetryStaleAfter: TimeInterval = 5
 
     // Stabil für 4G: 1 Upload gleichzeitig
     private let maxConcurrent = 1
@@ -76,6 +77,9 @@ final class UploadManager: ObservableObject {
                             self.activeClients[itemId] = nil
                             self.items[idx].status = .paused
                             self.items[idx].lastResumeAttempt = now
+                            self.items[idx].speedMBps = 0
+                            self.items[idx].etaSeconds = 0
+                            self.items[idx].lastProgressAt = nil
                         }
                     }
                     self.releaseSleepAssertionIfNeeded()
@@ -92,6 +96,13 @@ final class UploadManager: ObservableObject {
                     }
                     self.schedule()
                 }
+            }
+            .store(in: &cancellables)
+
+        Timer.publish(every: 1, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                self?.decayStaleMetrics()
             }
             .store(in: &cancellables)
     }
@@ -120,6 +131,8 @@ final class UploadManager: ObservableObject {
         }
 
         for url in files {
+            let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+            let fileSize = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
             let it = UploadItem(
                 file: url,
                 libraryConfigId: lib.id.uuidString,
@@ -131,7 +144,9 @@ final class UploadManager: ObservableObject {
                 etaSeconds: 0,
                 videoId: nil
             )
-            items.append(it)
+            var mutable = it
+            mutable.totalBytes = fileSize
+            items.append(mutable)
         }
 
         acquireSleepAssertionIfNeeded()
@@ -161,6 +176,10 @@ final class UploadManager: ObservableObject {
         guard items[idx].status == .pending else { return }
 
         let item = items[idx]
+        if items[idx].totalBytes <= 0 {
+            let attrs = try? FileManager.default.attributesOfItem(atPath: item.file.path)
+            items[idx].totalBytes = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+        }
 
         guard let lib = store.libraries.first(where: { $0.id.uuidString == item.libraryConfigId }),
               let apiKey = store.apiKey(for: lib) else {
@@ -352,6 +371,9 @@ final class UploadManager: ObservableObject {
         if items[idx].status == .uploading {
             items[idx].status = .paused
             items[idx].lastResumeAttempt = Date()
+            items[idx].speedMBps = 0
+            items[idx].etaSeconds = 0
+            items[idx].lastProgressAt = nil
         }
 
         releaseSleepAssertionIfNeeded()
@@ -364,6 +386,10 @@ final class UploadManager: ObservableObject {
 
         if items[idx].status == .paused {
             items[idx].status = .pending
+            items[idx].lastResumeAttempt = Date()
+            items[idx].speedMBps = 0
+            items[idx].etaSeconds = 0
+            items[idx].lastProgressAt = nil
         }
 
         acquireSleepAssertionIfNeeded()
@@ -381,6 +407,9 @@ final class UploadManager: ObservableObject {
             if let idx = items.firstIndex(where: { $0.id == id }) {
                 items[idx].status = .paused
                 items[idx].lastResumeAttempt = now
+                items[idx].speedMBps = 0
+                items[idx].etaSeconds = 0
+                items[idx].lastProgressAt = nil
             }
         }
         releaseSleepAssertionIfNeeded()
@@ -824,6 +853,7 @@ final class UploadManager: ObservableObject {
             self.items[idx].progress = progress
             self.items[idx].speedMBps = mbps
             self.items[idx].etaSeconds = eta
+            self.items[idx].lastProgressAt = Date()
         }
     }
 
@@ -833,6 +863,9 @@ final class UploadManager: ObservableObject {
             self.items[idx].status = .success
             self.items[idx].videoId = videoId
             self.items[idx].progress = 1.0
+            self.items[idx].speedMBps = 0
+            self.items[idx].etaSeconds = 0
+            self.items[idx].lastProgressAt = nil
             self.items[idx].completedAt = Date()
             self.persistItems()
             self.pollProcessingReady(itemId: itemId, attempt: 0)
@@ -843,8 +876,37 @@ final class UploadManager: ObservableObject {
         DispatchQueue.main.async {
             guard let idx = self.items.firstIndex(where: { $0.id == itemId }) else { return }
             self.items[idx].status = .failed
+            self.items[idx].speedMBps = 0
+            self.items[idx].etaSeconds = 0
+            self.items[idx].lastProgressAt = nil
             self.items[idx].completedAt = Date()
             self.persistItems()
+        }
+    }
+
+    private func decayStaleMetrics() {
+        let now = Date()
+        var changed = false
+        for i in items.indices {
+            guard items[i].status == .uploading else { continue }
+            guard let last = items[i].lastProgressAt else {
+                if items[i].speedMBps != 0 || items[i].etaSeconds != 0 {
+                    items[i].speedMBps = 0
+                    items[i].etaSeconds = 0
+                    changed = true
+                }
+                continue
+            }
+            if now.timeIntervalSince(last) >= telemetryStaleAfter {
+                if items[i].speedMBps != 0 || items[i].etaSeconds != 0 {
+                    items[i].speedMBps = 0
+                    items[i].etaSeconds = 0
+                    changed = true
+                }
+            }
+        }
+        if changed {
+            objectWillChange.send()
         }
     }
 

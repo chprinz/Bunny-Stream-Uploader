@@ -47,12 +47,16 @@ final class BunnyUploadClient: NSObject {
         isPaused = true
         task?.cancel()
         task = nil
+        stopStallWatchdog()
     }
 
     /// Resume a previously paused upload. (Requires you to call `startTusUpload(...)` once before.)
     func resume() {
         guard !isFinished else { return }
         isPaused = false
+        lastProgressAt = Date()
+        lastProgressBytes = uploadedBytes
+        markActivity()
         continueUploadLoop()
     }
 
@@ -80,12 +84,17 @@ final class BunnyUploadClient: NSObject {
         isPaused = false
         isFinished = false
         lastErrorWasCancel = false
+        recoveryCancelInFlight = false
 
         // File size
         let attrs = try? FileManager.default.attributesOfItem(atPath: file.path)
         totalBytes = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
 
-        startedAt = Date()
+        lastProgressAt = Date()
+        lastProgressBytes = uploadedBytes
+        smoothedBps = 0
+        markActivity()
+        startStallWatchdog()
 
         // If we already have an uploadURL (e.g. coming from persistence), just continue.
         if uploadURL != nil {
@@ -93,7 +102,7 @@ final class BunnyUploadClient: NSObject {
             return
         }
 
-        createTusUpload()
+        createTusUpload(attempt: 0)
     }
 
     // MARK: - Internals
@@ -113,7 +122,6 @@ final class BunnyUploadClient: NSObject {
     private var totalBytes: Int64 = 0
     private var uploadedBytes: Int64 = 0
 
-    private var startedAt: Date = .now
     private var progressCb: ((Double, Double, TimeInterval) -> Void)?
     private var completionCb: ((Bool) -> Void)?
 
@@ -124,8 +132,8 @@ final class BunnyUploadClient: NSObject {
 
     private let workQ = DispatchQueue(label: "BunnyTusUploader.queue")
 
-    // Chunk size tuned for unstable / 4G networks
-    private let chunkSize: Int = 4 * 1024 * 1024 // 4 MB
+    // Smaller chunks recover more reliably on unstable links.
+    private let chunkSize: Int = 1 * 1024 * 1024 // 1 MB
 
     // Simple retry schedule for transient network errors
     private let retryDelays: [TimeInterval] = [0, 1, 2, 5, 5, 10, 30]
@@ -133,6 +141,15 @@ final class BunnyUploadClient: NSObject {
     // TUS auth – pro Upload einmal erzeugt und für alle Requests wiederverwendet
     private var authSignature: String?
     private var authExpire: Int?
+    
+    private var lastProgressAt: Date = .now
+    private var lastProgressBytes: Int64 = 0
+    private var smoothedBps: Double = 0
+    private var lastActivityAt: Date = .now
+    private var recoveryCancelInFlight = false
+    private var stallTimer: DispatchSourceTimer?
+    private let stallCheckInterval: TimeInterval = 15
+    private let stallTimeout: TimeInterval = 90
 
     // MARK: - TUS helpers
 
@@ -143,8 +160,8 @@ final class BunnyUploadClient: NSObject {
             return (sig, exp)
         }
 
-        // Expire after 6 hours
-        let exp = Int(Date().addingTimeInterval(6 * 3600).timeIntervalSince1970)
+        // Expire after 24 hours (aligned with Bunny examples for large uploads)
+        let exp = Int(Date().addingTimeInterval(24 * 3600).timeIntervalSince1970)
 
         // WICHTIG: exakte Reihenfolge für Bunny!
         let payload = "\(libraryId)\(streamKey)\(exp)\(videoId)"
@@ -171,7 +188,8 @@ final class BunnyUploadClient: NSObject {
         Data(s.utf8).base64EncodedString()
     }
 
-    private func createTusUpload() {
+    private func createTusUpload(attempt: Int) {
+        if isPaused || isFinished { return }
         guard let fileURL, let libraryId, let videoId, let streamKey else {
             finish(false)
             return
@@ -192,11 +210,12 @@ final class BunnyUploadClient: NSObject {
 
         task = session.dataTask(with: req) { [weak self] _, resp, err in
             guard let self else { return }
+            self.markActivity()
 
             if self.handleCancelableError(err) { return }
 
             guard let http = resp as? HTTPURLResponse else {
-                self.retryOrFail(stage: "create", attempt: 0) { self.createTusUpload() }
+                self.retryOrFail(stage: "create", attempt: attempt) { self.createTusUpload(attempt: attempt + 1) }
                 return
             }
 
@@ -223,6 +242,12 @@ final class BunnyUploadClient: NSObject {
                 self.uploadURL = url
                 self.onURLUpdate?(url)
                 self.continueUploadLoop()
+                return
+            }
+
+            if http.statusCode == 401 || http.statusCode == 403 {
+                self.invalidateAuthHeaders()
+                self.retryOrFail(stage: "create_auth_\(http.statusCode)", attempt: attempt) { self.createTusUpload(attempt: attempt + 1) }
                 return
             }
 
@@ -255,13 +280,35 @@ final class BunnyUploadClient: NSObject {
         // Perform a very short HEAD probe (no retries)
         session.dataTask(with: req) { [weak self] _, resp, err in
             guard let self else { return }
-            if self.handleCancelableError(err) {
-                // Route not ready yet → retry after short delay
+            self.markActivity()
+            if let err {
+                if self.handleCancelableError(err) {
+                    self.workQ.asyncAfter(deadline: .now() + 1.0) {
+                        self.probeRoute(action)
+                    }
+                    return
+                }
+                // transient route issue → probe again
                 self.workQ.asyncAfter(deadline: .now() + 1.0) {
                     self.probeRoute(action)
                 }
                 return
             }
+
+            if let http = resp as? HTTPURLResponse {
+                if http.statusCode == 401 || http.statusCode == 403 {
+                    self.invalidateAuthHeaders()
+                    action()
+                    return
+                }
+                if !(http.statusCode == 200 || http.statusCode == 204) {
+                    self.workQ.asyncAfter(deadline: .now() + 1.0) {
+                        self.probeRoute(action)
+                    }
+                    return
+                }
+            }
+
             // Route ok → continue with real action
             action()
         }.resume()
@@ -284,6 +331,7 @@ final class BunnyUploadClient: NSObject {
 
         task = session.dataTask(with: req) { [weak self] _, resp, err in
             guard let self else { return }
+            self.markActivity()
 
             if self.handleCancelableError(err) { return }
 
@@ -294,6 +342,9 @@ final class BunnyUploadClient: NSObject {
 
             // TUS HEAD should be 200 or 204
             if !(http.statusCode == 200 || http.statusCode == 204) {
+                if http.statusCode == 401 || http.statusCode == 403 {
+                    self.invalidateAuthHeaders()
+                }
                 self.retryOrFail(stage: "head_status_\(http.statusCode)", attempt: attempt) { self.fetchOffsetAndUpload(attempt: attempt + 1) }
                 return
             }
@@ -351,6 +402,7 @@ final class BunnyUploadClient: NSObject {
 
             task = session.uploadTask(with: req, from: data) { [weak self] _, resp, err in
                 guard let self else { return }
+                self.markActivity()
 
                 if self.handleCancelableError(err) { return }
 
@@ -385,12 +437,29 @@ final class BunnyUploadClient: NSObject {
                     return
                 }
 
+                if http.statusCode == 409 {
+                    // Offset mismatch: server already advanced; re-sync before next PATCH.
+                    self.workQ.async {
+                        if self.isPaused || self.isFinished { return }
+                        self.fetchOffsetAndUpload(attempt: 0)
+                    }
+                    return
+                }
+
                 // Bunny may temporarily lock uploads and respond with 423 after a network hiccup.
                 // In that case, wait briefly and re-sync via HEAD instead of failing the upload.
                 if http.statusCode == 423 {
                     print("TUS PATCH locked (423), retrying via HEAD…")
                     self.workQ.asyncAfter(deadline: .now() + 1.0) {
                         if self.isPaused || self.isFinished { return }
+                        self.fetchOffsetAndUpload(attempt: 0)
+                    }
+                    return
+                }
+
+                if http.statusCode == 401 || http.statusCode == 403 {
+                    self.invalidateAuthHeaders()
+                    self.retryOrFail(stage: "patch_auth_\(http.statusCode)", attempt: attempt) {
                         self.fetchOffsetAndUpload(attempt: 0)
                     }
                     return
@@ -412,10 +481,19 @@ final class BunnyUploadClient: NSObject {
 
     private func reportProgress(bytesSent: Int64) {
         let total = max(totalBytes, 1)
-        let prog = Double(bytesSent) / Double(total)
+        let prog = min(max(Double(bytesSent) / Double(total), 0), 1)
 
-        let elapsed = Date().timeIntervalSince(startedAt)
-        let bps = elapsed > 0 ? Double(bytesSent) / elapsed : 0
+        let now = Date()
+        let deltaTime = now.timeIntervalSince(lastProgressAt)
+        let deltaBytes = max(0, bytesSent - lastProgressBytes)
+        if deltaTime > 0.05 && deltaBytes > 0 {
+            let instantBps = Double(deltaBytes) / deltaTime
+            smoothedBps = smoothedBps <= 0 ? instantBps : (0.25 * instantBps + 0.75 * smoothedBps)
+            lastProgressAt = now
+            lastProgressBytes = bytesSent
+            markActivity()
+        }
+        let bps = max(0, smoothedBps)
         let mbps = bps / 1_000_000.0
 
         let remaining = Double(totalBytes - bytesSent)
@@ -436,6 +514,10 @@ final class BunnyUploadClient: NSObject {
             switch ns.code {
             case NSURLErrorCancelled:
                 lastErrorWasCancel = true
+                if recoveryCancelInFlight {
+                    recoveryCancelInFlight = false
+                    return true
+                }
                 if isPaused { return true }
                 finish(false)
                 return true
@@ -443,11 +525,9 @@ final class BunnyUploadClient: NSObject {
             case NSURLErrorNetworkConnectionLost,
                  NSURLErrorNotConnectedToInternet,
                  NSURLErrorTimedOut:
-                // Treat transient network errors as a pause, not a failure
-                print("TUS network error (\(ns.code)), pausing upload")
-                isPaused = true
-                task = nil
-                return true
+                // Let stage-specific retry logic decide recovery path.
+                print("TUS transient network error (\(ns.code))")
+                return false
 
             default:
                 break
@@ -477,9 +557,55 @@ final class BunnyUploadClient: NSObject {
         if isFinished { return }
         isFinished = true
         task = nil
+        stopStallWatchdog()
 
         DispatchQueue.main.async {
             self.completionCb?(ok)
         }
+    }
+
+    private func invalidateAuthHeaders() {
+        authSignature = nil
+        authExpire = nil
+    }
+
+    private func markActivity() {
+        workQ.async {
+            self.lastActivityAt = Date()
+        }
+    }
+
+    private func startStallWatchdog() {
+        workQ.async {
+            self.stopStallWatchdogLocked()
+            let t = DispatchSource.makeTimerSource(queue: self.workQ)
+            t.schedule(deadline: .now() + self.stallCheckInterval, repeating: self.stallCheckInterval)
+            t.setEventHandler { [weak self] in
+                guard let self else { return }
+                if self.isPaused || self.isFinished { return }
+                let idle = Date().timeIntervalSince(self.lastActivityAt)
+                guard idle >= self.stallTimeout else { return }
+                guard self.task != nil else { return }
+                print("TUS stalled for \(Int(idle))s, forcing offset re-sync")
+                self.recoveryCancelInFlight = true
+                self.task?.cancel()
+                self.task = nil
+                self.lastActivityAt = Date()
+                self.fetchOffsetAndUpload(attempt: 0)
+            }
+            self.stallTimer = t
+            t.resume()
+        }
+    }
+
+    private func stopStallWatchdog() {
+        workQ.async {
+            self.stopStallWatchdogLocked()
+        }
+    }
+
+    private func stopStallWatchdogLocked() {
+        stallTimer?.cancel()
+        stallTimer = nil
     }
 }
