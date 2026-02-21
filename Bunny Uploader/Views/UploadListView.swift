@@ -383,6 +383,12 @@ struct UploadListView: View {
                         Button("Copy play URL") { copyPlayURL(url) }
                     }
 
+                    if let url = dashboardURL(for: item) {
+                        Button("Open in Dashboard") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+
                     Button(role: .destructive) {
                         pendingRemoteDeleteItem = item
                         showRemoteDeleteAlert = true
@@ -412,6 +418,16 @@ struct UploadListView: View {
     private func playURL(for item: UploadItem) -> URL? {
         guard let vid = item.videoId else { return nil }
         return URL(string: "https://iframe.mediadelivery.net/embed/\(item.libraryId)/\(vid)")
+    }
+
+    private func dashboardURL(for item: UploadItem) -> URL? {
+        guard let videoId = item.videoId else { return nil }
+        guard var components = URLComponents(string: "https://dash.bunny.net/stream/\(item.libraryId)/library/overview") else {
+            return nil
+        }
+        components.queryItems = [URLQueryItem(name: "videoId", value: videoId)]
+        components.fragment = "noscroll"
+        return components.url
     }
 
     private func copyPlayURL(_ url: URL) {
