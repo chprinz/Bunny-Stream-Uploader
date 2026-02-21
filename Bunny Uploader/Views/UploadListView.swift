@@ -138,9 +138,12 @@ struct UploadListView: View {
                             Image(systemName: showHistory ? "chevron.down" : "chevron.right")
                             Text("Library (\(historyItems.count))")
                                 .font(.headline)
-                            if isSyncingLibrary {
-                                ProgressView().scaleEffect(0.65)
+                            ZStack {
+                                ProgressView()
+                                    .scaleEffect(0.65)
+                                    .opacity(isSyncingLibrary ? 1 : 0)
                             }
+                            .frame(width: 14, height: 14)
                             Spacer()
                         }
                     }
@@ -840,6 +843,7 @@ struct UploadListView: View {
     }
 
     private func syncHistoryWithRemote() {
+        guard !isSyncingLibrary else { return }
         guard let libId = selectedLibraryId,
               let lib = store.libraries.first(where: { $0.id == libId }) else { return }
 
