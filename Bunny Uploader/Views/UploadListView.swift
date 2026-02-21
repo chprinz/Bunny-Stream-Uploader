@@ -35,6 +35,7 @@ struct UploadListView: View {
     @State private var failedThumbnailReloadToken: Int = 0
     @State private var failedThumbnailIds: Set<UUID> = []
     private let libraryAutoSyncInterval: TimeInterval = 20
+    private let contentTrailingInset: CGFloat = 12
 
     private var activeItems: [UploadItem] {
         uploads.items.filter { item in
@@ -161,8 +162,10 @@ struct UploadListView: View {
                     }
                 }
                 .padding(.bottom, 20)
+                .padding(.trailing, contentTrailingInset)
             }
-            .padding(.horizontal, 16)
+            .padding(.leading, 16)
+            .padding(.trailing, 0)
             .alert("Upload is still running. Delete the video?",
                    isPresented: $showDeleteAlert) {
                 Button("Cancel", role: .cancel) { }
@@ -422,7 +425,6 @@ struct UploadListView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(Color.primary.opacity(0.025))
         )
-        .padding(.trailing, 6) // avoid scrollbar overlap
     }
 
     // MARK: - URL helpers
