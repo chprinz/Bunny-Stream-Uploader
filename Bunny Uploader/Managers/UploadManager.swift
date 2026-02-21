@@ -81,7 +81,7 @@ final class UploadManager: ObservableObject {
                 self.isNetworkConnected = connected
 
                 if !connected {
-                    self.diagnostics.log("network_offline pausing_active_uploads=\(self.activeClients.count)")
+                    self.diagnostics.log("Network disconnected. Pausing \(self.activeClients.count) active upload(s).")
                     let now = Date()
                     for itemId in Array(self.activeClients.keys) {
                         if let idx = self.items.firstIndex(where: { $0.id == itemId }) {
@@ -99,7 +99,7 @@ final class UploadManager: ObservableObject {
                 }
 
                 if connected && self.autoResumeUploads {
-                    self.diagnostics.log("network_online auto_resume=true")
+                    self.diagnostics.log("Network connected. Auto-resume is enabled.")
                     for i in self.items.indices {
                         if self.items[i].status == .paused {
                             if self.items[i].lastResumeAttempt != nil {
@@ -110,7 +110,7 @@ final class UploadManager: ObservableObject {
                 }
 
                 if connected {
-                    self.diagnostics.log("network_online scheduling_pending=true")
+                    self.diagnostics.log("Checking pending uploads after reconnect.")
                     self.schedule()
                 }
             }
@@ -218,7 +218,7 @@ final class UploadManager: ObservableObject {
             let client = BunnyUploadClient()
             client.setResumeURL(resumeURL)
             client.onEvent = { [weak self] msg in
-                self?.diagnostics.log("file=\(item.file.lastPathComponent) item=\(itemId.uuidString) \(msg)")
+                self?.logTusEvent(fileName: item.file.lastPathComponent, raw: msg)
             }
             client.onResumeResourceMissing = { [weak self] in
                 self?.invalidateResumeAndQueueFresh(itemId: itemId)
@@ -281,7 +281,7 @@ final class UploadManager: ObservableObject {
 
             let client = BunnyUploadClient()
             client.onEvent = { [weak self] msg in
-                self?.diagnostics.log("file=\(item.file.lastPathComponent) item=\(itemId.uuidString) \(msg)")
+                self?.logTusEvent(fileName: item.file.lastPathComponent, raw: msg)
             }
             client.onResumeResourceMissing = { [weak self] in
                 self?.invalidateResumeAndQueueFresh(itemId: itemId)
@@ -398,7 +398,7 @@ final class UploadManager: ObservableObject {
 
     func pause(itemId: UUID) {
         guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
-        diagnostics.log("user_pause file=\(items[idx].file.lastPathComponent) item=\(itemId.uuidString)")
+        diagnostics.log("Upload paused manually: \(items[idx].file.lastPathComponent)")
 
         activeClients[itemId]?.pause()
         activeClients[itemId] = nil
@@ -418,7 +418,7 @@ final class UploadManager: ObservableObject {
 
     func resume(itemId: UUID) {
         guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
-        diagnostics.log("user_resume file=\(items[idx].file.lastPathComponent) item=\(itemId.uuidString)")
+        diagnostics.log("Upload resumed manually: \(items[idx].file.lastPathComponent)")
 
         if items[idx].status == .paused {
             items[idx].status = .pending
@@ -495,7 +495,7 @@ final class UploadManager: ObservableObject {
         let filePath = items[idx].file.path
         if !FileManager.default.fileExists(atPath: filePath) {
             items[idx].errorMessage = "Local file is missing. Re-add the file to upload again."
-            diagnostics.log("retry_failed_missing_file file=\(items[idx].file.lastPathComponent) item=\(itemId.uuidString)")
+            diagnostics.log("Retry skipped: local file is missing (\(items[idx].file.lastPathComponent)).")
             persistItems()
             return
         }
@@ -509,7 +509,7 @@ final class UploadManager: ObservableObject {
         items[idx].lastProgressAt = nil
         items[idx].lastResumeAttempt = Date()
         items[idx].status = .pending
-        diagnostics.log("retry_failed file=\(items[idx].file.lastPathComponent) item=\(itemId.uuidString)")
+        diagnostics.log("Retrying failed upload: \(items[idx].file.lastPathComponent)")
 
         acquireSleepAssertionIfNeeded()
         schedule()
@@ -519,7 +519,7 @@ final class UploadManager: ObservableObject {
     private func invalidateResumeAndQueueFresh(itemId: UUID) {
         DispatchQueue.main.async {
             guard let idx = self.items.firstIndex(where: { $0.id == itemId }) else { return }
-            self.diagnostics.log("retry_fresh_after_missing_remote file=\(self.items[idx].file.lastPathComponent) item=\(itemId.uuidString)")
+            self.diagnostics.log("Remote resumable session missing. Restarting as fresh upload: \(self.items[idx].file.lastPathComponent)")
             self.items[idx].videoId = nil
             self.items[idx].tusUploadURL = nil
             self.items[idx].bytesUploaded = 0
@@ -941,7 +941,7 @@ final class UploadManager: ObservableObject {
     private func markSuccess(itemId: UUID, videoId: String) {
         DispatchQueue.main.async {
             guard let idx = self.items.firstIndex(where: { $0.id == itemId }) else { return }
-            self.diagnostics.log("upload_success file=\(self.items[idx].file.lastPathComponent) item=\(itemId.uuidString) video=\(videoId)")
+            self.diagnostics.log("Upload completed: \(self.items[idx].file.lastPathComponent) (video \(videoId))")
             self.items[idx].status = .success
             self.items[idx].videoId = videoId
             self.items[idx].progress = 1.0
@@ -957,7 +957,7 @@ final class UploadManager: ObservableObject {
     private func markFailed(itemId: UUID) {
         DispatchQueue.main.async {
             guard let idx = self.items.firstIndex(where: { $0.id == itemId }) else { return }
-            self.diagnostics.log("upload_failed file=\(self.items[idx].file.lastPathComponent) item=\(itemId.uuidString)")
+            self.diagnostics.log("Upload failed: \(self.items[idx].file.lastPathComponent)")
             self.items[idx].status = .failed
             self.items[idx].speedMBps = 0
             self.items[idx].etaSeconds = 0
@@ -1021,6 +1021,46 @@ final class UploadManager: ObservableObject {
 #else
         return false
 #endif
+    }
+
+    private func logTusEvent(fileName: String, raw: String) {
+        let message: String
+        if raw.hasPrefix("network_transient_error") {
+            message = "Temporary network issue while uploading \(fileName). Retrying."
+        } else if raw.hasPrefix("retry_scheduled") {
+            let delay = extractValue("delay", from: raw) ?? "?"
+            let stage = extractValue("stage", from: raw) ?? "unknown"
+            message = "Retry scheduled in \(delay) for \(fileName) (\(stage))."
+        } else if raw.hasPrefix("retry_continuing") {
+            let delay = extractValue("delay", from: raw) ?? "?"
+            let stage = extractValue("stage", from: raw) ?? "unknown"
+            message = "Still retrying \(fileName) every \(delay) (\(stage))."
+        } else if raw.hasPrefix("stall_detected") {
+            message = "Upload stalled for \(fileName). Re-syncing upload offset."
+        } else if raw.hasPrefix("resume_resource_missing") {
+            message = "Resumable session expired for \(fileName). Preparing fresh upload."
+        } else if raw.hasPrefix("patch_locked_423") {
+            message = "Upload temporarily locked for \(fileName). Re-syncing and continuing."
+        } else if raw.hasPrefix("retry_exhausted") {
+            let stage = extractValue("stage", from: raw) ?? "unknown"
+            message = "Retries exhausted for \(fileName) (\(stage))."
+        } else if raw.hasPrefix("patch_unexpected_status") || raw.hasPrefix("create_unexpected_status") {
+            let status = extractValue("status", from: raw) ?? "unknown"
+            message = "Unexpected server response (\(status)) while uploading \(fileName)."
+        } else {
+            message = "\(fileName): \(raw)"
+        }
+        diagnostics.log(message)
+    }
+
+    private func extractValue(_ key: String, from raw: String) -> String? {
+        let token = "\(key)="
+        guard let start = raw.range(of: token)?.upperBound else { return nil }
+        let tail = raw[start...]
+        if let end = tail.firstIndex(of: " ") {
+            return String(tail[..<end])
+        }
+        return String(tail)
     }
 
     // MARK: - Sleep Control
