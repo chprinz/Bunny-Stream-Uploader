@@ -34,8 +34,8 @@ struct ContentView: View {
         if let col = store.collections[lib.id]?.first(where: { $0.id == colId }) {
             return col.name
         }
-        // fall back to ID if name is not yet loaded
-        return colId
+        // Keep UI human-readable while collections are still loading.
+        return "Loading collection name…"
     }
 
     var body: some View {

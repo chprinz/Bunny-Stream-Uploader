@@ -602,11 +602,7 @@ final class UploadManager: ObservableObject {
                 ?? (json["thumbnailUrl"] as? String)
                 ?? (json["thumbnailURL"] as? String)
             let remoteStatus = json["status"] as? Int
-            let encodeProgress: Double? = {
-                if let p = json["encodeProgress"] as? Double { return p }
-                if let p = json["encodeProgress"] as? Int { return Double(p) }
-                return nil
-            }()
+            let encodeProgress = parseEncodeProgress(json)
             let durationSeconds: TimeInterval? = {
                 if let v = json["length"] as? Double { return v }
                 if let v = json["length"] as? Int { return Double(v) }
@@ -623,15 +619,25 @@ final class UploadManager: ObservableObject {
                     self.items[i].remoteDescription = desc
                     self.items[i].remoteThumbnailPath = thumb
                     self.items[i].remoteStatusCode = remoteStatus
-                    self.items[i].remoteEncodeProgress = encodeProgress
+                    let resolvedProgress = encodeProgress ?? self.items[i].remoteEncodeProgress
+                    self.items[i].remoteEncodeProgress = resolvedProgress
                     self.items[i].remoteDurationSeconds = durationSeconds
-                    if let prog = encodeProgress, prog >= 100, !self.items[i].processingReadyNotified {
-                        self.items[i].processingReadyNotified = true
-                        self.persistItems()
-                        self.sendReadyNotification(for: self.items[i])
-                    } else {
-                        self.persistItems()
+
+                    if let prog = resolvedProgress {
+                        if prog >= 100 {
+                            if !self.items[i].processingReadyNotified {
+                                self.items[i].processingReadyNotified = true
+                                self.persistItems()
+                                self.sendReadyNotification(for: self.items[i])
+                                completion(self.items[i])
+                                return
+                            }
+                        } else {
+                            self.items[i].processingReadyNotified = false
+                        }
                     }
+
+                    self.persistItems()
                     completion(self.items[i])
                 } else {
                     completion(nil)
@@ -747,13 +753,7 @@ final class UploadManager: ObservableObject {
             ?? (raw["thumbnail"] as? String)
             ?? (raw["thumbnailUrl"] as? String)
             ?? (raw["thumbnailURL"] as? String)
-        let encodeProgress: Double? = {
-            if let p = raw["encodeProgress"] as? Double { return p }
-            if let p = raw["encodeProgress"] as? Int { return Double(p) }
-            if let p = raw["processingPercentage"] as? Double { return p }
-            if let p = raw["processingPercentage"] as? Int { return Double(p) }
-            return nil
-        }()
+        let encodeProgress = parseEncodeProgress(raw)
         let statusCode = raw["status"] as? Int
         let createdAt = parseRemoteDate(
             raw["dateUploaded"]
@@ -872,10 +872,13 @@ final class UploadManager: ObservableObject {
             items[idx].remoteTitle = remote.title
             items[idx].remoteThumbnailPath = remote.thumbnail
             items[idx].remoteStatusCode = remote.statusCode
-            items[idx].remoteEncodeProgress = remote.encodeProgress
+            items[idx].remoteEncodeProgress = remote.encodeProgress ?? items[idx].remoteEncodeProgress
             items[idx].remoteDurationSeconds = remote.durationSeconds
             items[idx].completedAt = remoteDate
             items[idx].createdAt = remoteDate
+            if let prog = items[idx].remoteEncodeProgress {
+                items[idx].processingReadyNotified = prog >= 100
+            }
             if items[idx].status == .success {
                 items[idx].progress = 1.0
             }
@@ -915,6 +918,12 @@ final class UploadManager: ObservableObject {
             newItem.remoteEncodeProgress = remote.encodeProgress
             newItem.remoteDurationSeconds = remote.durationSeconds
             newItem.createdAt = remote.createdAt ?? fallbackDate
+            if let prog = remote.encodeProgress {
+                newItem.processingReadyNotified = prog >= 100
+            } else {
+                // Imported historical videos are generally already available.
+                newItem.processingReadyNotified = true
+            }
             items.append(newItem)
         }
     }
@@ -945,6 +954,9 @@ final class UploadManager: ObservableObject {
             self.items[idx].status = .success
             self.items[idx].videoId = videoId
             self.items[idx].progress = 1.0
+            self.items[idx].remoteEncodeProgress = nil
+            self.items[idx].remoteStatusCode = nil
+            self.items[idx].processingReadyNotified = false
             self.items[idx].speedMBps = 0
             self.items[idx].etaSeconds = 0
             self.items[idx].lastProgressAt = nil
@@ -1011,6 +1023,10 @@ final class UploadManager: ObservableObject {
         diagnostics.clear()
     }
 
+    func ensureDiagnosticsLogExists() {
+        diagnostics.ensureExists()
+    }
+
     func copyRecentDiagnosticsLines(_ maxLines: Int = 200) -> Bool {
         let text = diagnostics.readRecentLines(maxLines)
         guard !text.isEmpty else { return false }
@@ -1061,6 +1077,22 @@ final class UploadManager: ObservableObject {
             return String(tail[..<end])
         }
         return String(tail)
+    }
+
+    private func parseEncodeProgress(_ raw: [String: Any]) -> Double? {
+        let keys = [
+            "encodeProgress",
+            "processingPercentage",
+            "processingProgress",
+            "transcodingProgress",
+            "encodingProgress"
+        ]
+        for key in keys {
+            if let v = raw[key] as? Double { return min(max(v, 0), 100) }
+            if let v = raw[key] as? Int { return min(max(Double(v), 0), 100) }
+            if let s = raw[key] as? String, let v = Double(s) { return min(max(v, 0), 100) }
+        }
+        return nil
     }
 
     // MARK: - Sleep Control
@@ -1187,6 +1219,15 @@ private final class DiagnosticsLogStore {
             try? FileManager.default.removeItem(at: logURL)
             for i in 1...backups {
                 try? FileManager.default.removeItem(at: logURL.appendingPathExtension("\(i)"))
+            }
+            _ = FileManager.default.createFile(atPath: logURL.path, contents: Data())
+        }
+    }
+
+    func ensureExists() {
+        queue.sync {
+            if !FileManager.default.fileExists(atPath: logURL.path) {
+                _ = FileManager.default.createFile(atPath: logURL.path, contents: Data())
             }
         }
     }

@@ -734,7 +734,8 @@ struct UploadListView: View {
         if let prog = item.remoteEncodeProgress {
             return prog < 100
         }
-        return false
+        // Fallback for locally uploaded videos before first processing detail arrives.
+        return !item.processingReadyNotified && item.videoId != nil
     }
 
     private func syncHistoryWithRemote() {

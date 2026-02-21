@@ -378,12 +378,9 @@ struct SettingsView: View {
     private func openDiagnosticsLog() {
         let url = URL(fileURLWithPath: uploads.diagnosticsLogPath)
 #if canImport(AppKit)
-        if FileManager.default.fileExists(atPath: url.path) {
-            NSWorkspace.shared.open(url)
-            diagnosticsMessage = ""
-        } else {
-            diagnosticsMessage = "Log file does not exist yet."
-        }
+        uploads.ensureDiagnosticsLogExists()
+        NSWorkspace.shared.open(url)
+        diagnosticsMessage = ""
 #endif
     }
 
