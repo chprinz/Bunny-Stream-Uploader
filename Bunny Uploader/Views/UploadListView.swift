@@ -8,6 +8,7 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import Combine
 
 struct UploadListView: View {
     let selectedLibraryId: UUID?
@@ -30,7 +31,7 @@ struct UploadListView: View {
     @State private var hoveredTitleId: UUID? = nil
     @State private var isSyncingLibrary = false
     @State private var scrollAnchorID = "top"
-    @State private var thumbnailReloadToken: Int = 0
+    @State private var failedThumbnailReloadToken: Int = 0
     @State private var failedThumbnailIds: Set<UUID> = []
 
     private let recentSuccessWindow: TimeInterval = 2.5
@@ -195,14 +196,14 @@ struct UploadListView: View {
             }
             .onChange(of: uploads.isNetworkConnected) { _, connected in
                 guard connected else { return }
-                thumbnailReloadToken &+= 1
+                failedThumbnailReloadToken &+= 1
                 syncHistoryWithRemote()
             }
             .onReceive(Timer.publish(every: 20, on: .main, in: .common).autoconnect()) { _ in
                 guard uploads.isNetworkConnected else { return }
                 guard !failedThumbnailIds.isEmpty else { return }
                 // Retry failed thumbnail fetches periodically while online.
-                thumbnailReloadToken &+= 1
+                failedThumbnailReloadToken &+= 1
             }
             .onAppear {
                 syncHistoryWithRemote()
@@ -455,10 +456,11 @@ struct UploadListView: View {
 
     private func thumbnailRequestURL(for item: UploadItem) -> URL? {
         guard let base = thumbnailURL(for: item) else { return nil }
+        guard failedThumbnailIds.contains(item.id) else { return base }
         guard var comps = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return base }
         var query = comps.queryItems ?? []
         query.removeAll { $0.name == "r" }
-        query.append(URLQueryItem(name: "r", value: String(thumbnailReloadToken)))
+        query.append(URLQueryItem(name: "r", value: String(failedThumbnailReloadToken)))
         comps.queryItems = query
         return comps.url ?? base
     }
@@ -560,17 +562,18 @@ struct UploadListView: View {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let image):
-                        failedThumbnailIds.remove(item.id)
                         image
                             .resizable()
                             .scaledToFill()
+                            .onAppear {
+                                failedThumbnailIds.remove(item.id)
+                            }
                     case .empty:
                         ZStack {
                             shape.fill(Color.primary.opacity(0.05))
                             ProgressView().scaleEffect(0.6)
                         }
                     case .failure:
-                        failedThumbnailIds.insert(item.id)
                         shape
                             .fill(Color.primary.opacity(0.05))
                             .overlay(
@@ -578,6 +581,9 @@ struct UploadListView: View {
                                     .font(.system(size: 14, weight: .semibold))
                                     .foregroundColor(.secondary.opacity(0.6))
                             )
+                            .onAppear {
+                                failedThumbnailIds.insert(item.id)
+                            }
                     @unknown default:
                         shape.fill(Color.primary.opacity(0.05))
                     }
