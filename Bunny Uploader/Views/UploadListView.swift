@@ -694,9 +694,16 @@ struct UploadListView: View {
         if item.status == .paused && !uploads.isNetworkConnected {
             return "Paused · No internet connection"
         }
+        if isRemoteProcessingFailed(item) {
+            return "Processing failed on Bunny"
+        }
         if isProcessing(item) {
-            let prog = item.remoteEncodeProgress.map { Int($0) } ?? 0
-            return "Processing on Bunny… (\(prog)%)"
+            let state = BunnyProcessingState.from(statusCode: item.remoteStatusCode)
+            let stage = state.label
+            if let prog = item.remoteEncodeProgress {
+                return "\(stage) on Bunny… (\(Int(prog))%)"
+            }
+            return "\(stage) on Bunny…"
         }
         return statusText(item.status)
     }
@@ -704,12 +711,16 @@ struct UploadListView: View {
     private func statusPill(for item: UploadItem) -> some View {
         let processing = isProcessing(item)
         let text: String = {
-            if processing { return "Processing" }
+            if isRemoteProcessingFailed(item) { return "Failed" }
+            if processing { return processingLabel(for: item) }
             if item.status == .pending && !uploads.isNetworkConnected { return "Waiting" }
             return item.status.uiLabel
         }()
 
         let palette: (Color, Color) = {
+            if isRemoteProcessingFailed(item) {
+                return (Color.red.opacity(0.18), Color.red)
+            }
             if processing {
                 return (Color.orange.opacity(0.18), Color.orange)
             }
@@ -744,7 +755,11 @@ struct UploadListView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "dd.MM HH:mm"
         let timestamp = formatter.string(from: date)
-        let label = isProcessing(item) ? "Processing" : item.status.uiLabel
+        let label: String = {
+            if isRemoteProcessingFailed(item) { return "Failed" }
+            if isProcessing(item) { return processingLabel(for: item) }
+            return item.status.uiLabel
+        }()
         return "\(label) \(timestamp)"
     }
 
@@ -762,11 +777,23 @@ struct UploadListView: View {
 
     private func isProcessing(_ item: UploadItem) -> Bool {
         guard item.status == .success else { return false }
+        let state = BunnyProcessingState.from(statusCode: item.remoteStatusCode)
+        if state.indicatesReady { return false }
+        if state == .failed { return false }
         if let prog = item.remoteEncodeProgress {
             return prog < 100
         }
         // Fallback for locally uploaded videos before first processing detail arrives.
         return !item.processingReadyNotified && item.videoId != nil
+    }
+
+    private func isRemoteProcessingFailed(_ item: UploadItem) -> Bool {
+        guard item.status == .success else { return false }
+        return BunnyProcessingState.from(statusCode: item.remoteStatusCode) == .failed
+    }
+
+    private func processingLabel(for item: UploadItem) -> String {
+        BunnyProcessingState.from(statusCode: item.remoteStatusCode).label
     }
 
     private func syncHistoryWithRemote() {

@@ -22,6 +22,42 @@ enum UploadStatus: String, Codable {
     }
 }
 
+enum BunnyProcessingState {
+    case uploaded
+    case processing
+    case transcoding
+    case finished
+    case failed
+    case unknown
+
+    static func from(statusCode: Int?) -> BunnyProcessingState {
+        guard let statusCode else { return .unknown }
+        switch statusCode {
+        case 1: return .uploaded
+        case 2: return .processing
+        case 3: return .transcoding
+        case 4: return .finished
+        case 5, 6: return .failed
+        default: return .unknown
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .uploaded: return "Uploaded"
+        case .processing: return "Processing"
+        case .transcoding: return "Transcoding"
+        case .finished: return "Ready"
+        case .failed: return "Failed"
+        case .unknown: return "Processing"
+        }
+    }
+
+    var indicatesReady: Bool {
+        self == .finished
+    }
+}
+
 struct UploadItem: Identifiable, Codable {
     var id: UUID = UUID()
     var file: URL

@@ -24,6 +24,7 @@ final class UploadManager: ObservableObject {
     private let store: LibraryStore
     private let network = NetworkMonitor()
     private var cancellables = Set<AnyCancellable>()
+    private var processingRefreshInFlight = Set<UUID>()
     private let telemetryStaleAfter: TimeInterval = 5
     private let noProgressHintAfter: TimeInterval = 120
     private let diagnostics = DiagnosticsLogStore()
@@ -120,6 +121,13 @@ final class UploadManager: ObservableObject {
             .autoconnect()
             .sink { [weak self] _ in
                 self?.decayStaleMetrics()
+            }
+            .store(in: &cancellables)
+
+        Timer.publish(every: 12, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                self?.refreshProcessingStatuses()
             }
             .store(in: &cancellables)
     }
@@ -619,22 +627,26 @@ final class UploadManager: ObservableObject {
                     self.items[i].remoteDescription = desc
                     self.items[i].remoteThumbnailPath = thumb
                     self.items[i].remoteStatusCode = remoteStatus
-                    let resolvedProgress = encodeProgress ?? self.items[i].remoteEncodeProgress
+                    let statusState = BunnyProcessingState.from(statusCode: remoteStatus)
+                    let resolvedProgress = self.resolveEncodeProgress(
+                        parsedProgress: encodeProgress,
+                        remoteStatus: remoteStatus,
+                        previousProgress: self.items[i].remoteEncodeProgress
+                    )
                     self.items[i].remoteEncodeProgress = resolvedProgress
                     self.items[i].remoteDurationSeconds = durationSeconds
 
-                    if let prog = resolvedProgress {
-                        if prog >= 100 {
-                            if !self.items[i].processingReadyNotified {
-                                self.items[i].processingReadyNotified = true
-                                self.persistItems()
-                                self.sendReadyNotification(for: self.items[i])
-                                completion(self.items[i])
-                                return
-                            }
-                        } else {
-                            self.items[i].processingReadyNotified = false
+                    let isReady = statusState.indicatesReady || ((resolvedProgress ?? 0) >= 100)
+                    if isReady {
+                        if !self.items[i].processingReadyNotified {
+                            self.items[i].processingReadyNotified = true
+                            self.persistItems()
+                            self.sendReadyNotification(for: self.items[i])
+                            completion(self.items[i])
+                            return
                         }
+                    } else {
+                        self.items[i].processingReadyNotified = false
                     }
 
                     self.persistItems()
@@ -872,13 +884,17 @@ final class UploadManager: ObservableObject {
             items[idx].remoteTitle = remote.title
             items[idx].remoteThumbnailPath = remote.thumbnail
             items[idx].remoteStatusCode = remote.statusCode
-            items[idx].remoteEncodeProgress = remote.encodeProgress ?? items[idx].remoteEncodeProgress
+            items[idx].remoteEncodeProgress = resolveEncodeProgress(
+                parsedProgress: remote.encodeProgress,
+                remoteStatus: remote.statusCode,
+                previousProgress: items[idx].remoteEncodeProgress
+            )
             items[idx].remoteDurationSeconds = remote.durationSeconds
             items[idx].completedAt = remoteDate
             items[idx].createdAt = remoteDate
-            if let prog = items[idx].remoteEncodeProgress {
-                items[idx].processingReadyNotified = prog >= 100
-            }
+            let statusState = BunnyProcessingState.from(statusCode: items[idx].remoteStatusCode)
+            let progressReady = (items[idx].remoteEncodeProgress ?? 0) >= 100
+            items[idx].processingReadyNotified = statusState.indicatesReady || progressReady
             if items[idx].status == .success {
                 items[idx].progress = 1.0
             }
@@ -915,15 +931,16 @@ final class UploadManager: ObservableObject {
             newItem.remoteTitle = remote.title
             newItem.remoteThumbnailPath = remote.thumbnail
             newItem.remoteStatusCode = remote.statusCode
-            newItem.remoteEncodeProgress = remote.encodeProgress
+            newItem.remoteEncodeProgress = resolveEncodeProgress(
+                parsedProgress: remote.encodeProgress,
+                remoteStatus: remote.statusCode,
+                previousProgress: nil
+            )
             newItem.remoteDurationSeconds = remote.durationSeconds
             newItem.createdAt = remote.createdAt ?? fallbackDate
-            if let prog = remote.encodeProgress {
-                newItem.processingReadyNotified = prog >= 100
-            } else {
-                // Imported historical videos are generally already available.
-                newItem.processingReadyNotified = true
-            }
+            let statusState = BunnyProcessingState.from(statusCode: remote.statusCode)
+            let progressReady = (newItem.remoteEncodeProgress ?? 0) >= 100
+            newItem.processingReadyNotified = statusState.indicatesReady || progressReady || remote.statusCode == nil
             items.append(newItem)
         }
     }
@@ -962,7 +979,7 @@ final class UploadManager: ObservableObject {
             self.items[idx].lastProgressAt = nil
             self.items[idx].completedAt = Date()
             self.persistItems()
-            self.pollProcessingReady(itemId: itemId, attempt: 0)
+            self.refreshProcessingStatus(itemId: itemId)
         }
     }
 
@@ -1095,6 +1112,16 @@ final class UploadManager: ObservableObject {
         return nil
     }
 
+    private func resolveEncodeProgress(parsedProgress: Double?, remoteStatus: Int?, previousProgress: Double?) -> Double? {
+        if let parsedProgress {
+            return min(max(parsedProgress, 0), 100)
+        }
+        if BunnyProcessingState.from(statusCode: remoteStatus).indicatesReady {
+            return 100
+        }
+        return previousProgress
+    }
+
     // MARK: - Sleep Control
 
     private func acquireSleepAssertionIfNeeded() {
@@ -1152,28 +1179,24 @@ final class UploadManager: ObservableObject {
         UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
     }
 
-    private func pollProcessingReady(itemId: UUID, attempt: Int) {
-        guard attempt < 30 else { return } // stop after ~30 attempts
-        guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
-        let item = items[idx]
-        guard item.status == .success else { return }
+    private func refreshProcessingStatuses() {
+        guard network.isConnected else { return }
+        let targetIDs = items.compactMap { item -> UUID? in
+            guard item.status == .success else { return nil }
+            guard item.videoId != nil else { return nil }
+            guard !item.processingReadyNotified else { return nil }
+            guard BunnyProcessingState.from(statusCode: item.remoteStatusCode) != .failed else { return nil }
+            return item.id
+        }
+        targetIDs.forEach(refreshProcessingStatus)
+    }
 
-        refreshVideoDetails(itemId: itemId) { [weak self] updated in
-            guard let self else { return }
-            if let up = updated,
-               let prog = up.remoteEncodeProgress,
-               prog >= 100,
-               !up.processingReadyNotified {
-                if let i = self.items.firstIndex(where: { $0.id == itemId }) {
-                    self.items[i].processingReadyNotified = true
-                    self.persistItems()
-                    self.sendReadyNotification(for: self.items[i])
-                }
-                return
-            }
-            // schedule next poll
-            DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
-                self.pollProcessingReady(itemId: itemId, attempt: attempt + 1)
+    private func refreshProcessingStatus(itemId: UUID) {
+        guard !processingRefreshInFlight.contains(itemId) else { return }
+        processingRefreshInFlight.insert(itemId)
+        refreshVideoDetails(itemId: itemId) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.processingRefreshInFlight.remove(itemId)
             }
         }
     }
