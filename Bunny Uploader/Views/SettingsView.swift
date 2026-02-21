@@ -2,7 +2,7 @@ import SwiftUI
 #if canImport(AppKit)
 import AppKit
 #endif
-
+    
 struct SettingsView: View {
 
     @EnvironmentObject private var store: LibraryStore
@@ -15,6 +15,7 @@ struct SettingsView: View {
     @State private var pullZoneHostCache: String = ""
 
     @AppStorage("autoResumeUploads") private var autoResumeUploads: Bool = true
+    @AppStorage("maxConcurrentUploads") private var maxConcurrentUploads: Int = 1
 
     @State private var showAddLibrarySheet: Bool = false
     @State private var newLibName: String = ""
@@ -253,6 +254,17 @@ struct SettingsView: View {
                     }
                 }
                 .padding(.horizontal)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Stepper(value: $maxConcurrentUploads, in: 1...6) {
+                        Text("Max concurrent uploads: \(maxConcurrentUploads)")
+                            .font(.body)
+                    }
+                    Text("1 is most stable for weak networks. Increase only if your connection is reliable.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal)
             }
             .padding(.top, 8)
 
@@ -346,6 +358,9 @@ struct SettingsView: View {
             }
             .padding(20)
             .frame(width: 360)
+        }
+        .onChange(of: maxConcurrentUploads) { _, _ in
+            uploads.schedule()
         }
     }
 

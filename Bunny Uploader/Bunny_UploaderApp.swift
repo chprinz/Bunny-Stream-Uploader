@@ -27,6 +27,7 @@ struct Bunny_UploaderApp: App {
         Settings {
             SettingsView()
                 .environmentObject(store)
+                .environmentObject(uploads)
         }
     }
 }

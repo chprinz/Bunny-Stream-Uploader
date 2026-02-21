@@ -30,6 +30,7 @@ struct UploadListView: View {
     @State private var hoveredTitleId: UUID? = nil
     @State private var isSyncingLibrary = false
     @State private var scrollAnchorID = "top"
+    @State private var thumbnailReloadToken: Int = 0
 
     private let recentSuccessWindow: TimeInterval = 2.5
 
@@ -90,6 +91,27 @@ struct UploadListView: View {
             ScrollView {
                 LazyVStack(spacing: 16) {
                     Color.clear.frame(height: 0.1).id(scrollAnchorID)
+
+                    if !uploads.isNetworkConnected {
+                        HStack(spacing: 8) {
+                            Image(systemName: "wifi.slash")
+                                .foregroundColor(.orange)
+                            Text("No internet connection. Uploads will continue automatically when you're back online.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color.orange.opacity(0.10))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(Color.orange.opacity(0.25), lineWidth: 1)
+                        )
+                    }
 
                     if !activeItems.isEmpty {
                         HStack {
@@ -168,6 +190,11 @@ struct UploadListView: View {
             }
             .onChange(of: selectedLibraryId) { _, _ in
                 withAnimation { proxy.scrollTo(scrollAnchorID, anchor: .top) }
+                syncHistoryWithRemote()
+            }
+            .onChange(of: uploads.isNetworkConnected) { _, connected in
+                guard connected else { return }
+                thumbnailReloadToken &+= 1
                 syncHistoryWithRemote()
             }
             .onAppear {
@@ -338,6 +365,12 @@ struct UploadListView: View {
                 statusPill(for: item)
 
                 Menu {
+                    if item.status == .failed {
+                        Button("Retry upload") {
+                            uploads.retryFailed(itemId: item.id)
+                        }
+                    }
+
                     if let url = playURL(for: item) {
                         Button("Copy play URL") { copyPlayURL(url) }
                     }
@@ -411,6 +444,16 @@ struct UploadListView: View {
         url.appendPathComponent(videoId)
         url.appendPathComponent(cleaned)
         return url
+    }
+
+    private func thumbnailRequestURL(for item: UploadItem) -> URL? {
+        guard let base = thumbnailURL(for: item) else { return nil }
+        guard var comps = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return base }
+        var query = comps.queryItems ?? []
+        query.removeAll { $0.name == "r" }
+        query.append(URLQueryItem(name: "r", value: String(thumbnailReloadToken)))
+        comps.queryItems = query
+        return comps.url ?? base
     }
 
     // MARK: - Edit helpers
@@ -506,7 +549,7 @@ struct UploadListView: View {
     private func thumbnailView(for item: UploadItem) -> some View {
         let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
         let content: some View = Group {
-            if let url = thumbnailURL(for: item) {
+            if let url = thumbnailRequestURL(for: item) {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let image):
@@ -611,6 +654,15 @@ struct UploadListView: View {
             }
             return "\(Int(item.progress * 100))% · \(String(format: "%.1f", item.speedMBps)) MB/s · ETA \(item.etaFormatted)"
         }
+        if item.status == .pending {
+            if !uploads.isNetworkConnected {
+                return "Waiting for internet connection"
+            }
+            return "Queued"
+        }
+        if item.status == .paused && !uploads.isNetworkConnected {
+            return "Paused · No internet connection"
+        }
         if isProcessing(item) {
             let prog = item.remoteEncodeProgress.map { Int($0) } ?? 0
             return "Processing on Bunny… (\(prog)%)"
@@ -622,11 +674,15 @@ struct UploadListView: View {
         let processing = isProcessing(item)
         let text: String = {
             if processing { return "Processing" }
+            if item.status == .pending && !uploads.isNetworkConnected { return "Waiting" }
             return item.status.uiLabel
         }()
 
         let palette: (Color, Color) = {
             if processing {
+                return (Color.orange.opacity(0.18), Color.orange)
+            }
+            if item.status == .pending && !uploads.isNetworkConnected {
                 return (Color.orange.opacity(0.18), Color.orange)
             }
             switch item.status {

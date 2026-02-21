@@ -31,6 +31,7 @@ final class BunnyUploadClient: NSObject {
     /// Callback fired once the TUS upload URL is known (used for persisting resume state)
     var onURLUpdate: ((URL) -> Void)?
     var onEvent: ((String) -> Void)?
+    var onResumeResourceMissing: (() -> Void)?
 
     /// Current in-flight request task (useful for hard cancel)
     private(set) var task: URLSessionTask?
@@ -343,6 +344,12 @@ final class BunnyUploadClient: NSObject {
 
             // TUS HEAD should be 200 or 204
             if !(http.statusCode == 200 || http.statusCode == 204) {
+                if http.statusCode == 404 || http.statusCode == 410 {
+                    self.logEvent("resume_resource_missing status=\(http.statusCode)")
+                    self.onResumeResourceMissing?()
+                    self.finish(false)
+                    return
+                }
                 if http.statusCode == 401 || http.statusCode == 403 {
                     self.invalidateAuthHeaders()
                 }
@@ -466,6 +473,13 @@ final class BunnyUploadClient: NSObject {
                     return
                 }
 
+                if http.statusCode == 404 || http.statusCode == 410 {
+                    self.logEvent("resume_resource_missing status=\(http.statusCode)")
+                    self.onResumeResourceMissing?()
+                    self.finish(false)
+                    return
+                }
+
                 self.logEvent("patch_unexpected_status status=\(http.statusCode) attempt=\(attempt)")
                 self.retryOrFail(stage: "patch_status_\(http.statusCode)", attempt: attempt) {
                     self.patchChunk(fromOffset: offset, attempt: attempt + 1)
@@ -541,6 +555,16 @@ final class BunnyUploadClient: NSObject {
         if isPaused || isFinished { return }
 
         if attempt >= retryDelays.count {
+            if isRecoverableStage(stage) {
+                let delay = retryDelays.last ?? 30
+                logEvent("retry_continuing stage=\(stage) delay=\(Int(delay))s")
+                workQ.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self else { return }
+                    if self.isPaused || self.isFinished { return }
+                    action()
+                }
+                return
+            }
             logEvent("retry_exhausted stage=\(stage)")
             finish(false)
             return
@@ -611,6 +635,20 @@ final class BunnyUploadClient: NSObject {
     private func stopStallWatchdogLocked() {
         stallTimer?.cancel()
         stallTimer = nil
+    }
+
+    private func isRecoverableStage(_ stage: String) -> Bool {
+        if stage.contains("auth") { return false }
+        if let range = stage.range(of: "status_") {
+            let codeStr = String(stage[range.upperBound...])
+            if let code = Int(codeStr) {
+                if code >= 500 { return true }
+                if code == 409 || code == 423 || code == 429 { return true }
+                if code >= 400 { return false }
+                return true
+            }
+        }
+        return stage == "create" || stage == "head" || stage == "patch"
     }
 
     private func logEvent(_ message: String) {

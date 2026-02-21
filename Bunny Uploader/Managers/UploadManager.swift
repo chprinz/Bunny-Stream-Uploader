@@ -17,7 +17,9 @@ import AppKit
 final class UploadManager: ObservableObject {
 
     @Published var items: [UploadItem] = []
+    @Published private(set) var isNetworkConnected: Bool = true
     @AppStorage("autoResumeUploads") private var autoResumeUploads: Bool = true
+    @AppStorage("maxConcurrentUploads") private var maxConcurrentUploads: Int = 1
 
     private let store: LibraryStore
     private let network = NetworkMonitor()
@@ -26,8 +28,10 @@ final class UploadManager: ObservableObject {
     private let noProgressHintAfter: TimeInterval = 120
     private let diagnostics = DiagnosticsLogStore()
 
-    // Stabil für 4G: 1 Upload gleichzeitig
-    private let maxConcurrent = 1
+    // Keep in a practical range for desktop usage.
+    private var maxConcurrent: Int {
+        min(max(maxConcurrentUploads, 1), 6)
+    }
 
     // Task registry fürs Cancel
     private var activeClients: [UUID: BunnyUploadClient] = [:]
@@ -55,10 +59,11 @@ final class UploadManager: ObservableObject {
 
     init(store: LibraryStore) {
         self.store = store
+        self.isNetworkConnected = network.isConnected
         loadPersistedItems()
 
         // Auto-resume persisted unfinished uploads (if enabled)
-        if autoResumeUploads {
+        if autoResumeUploads && network.isConnected {
             for i in items.indices {
                 switch items[i].status {
                 case .uploading, .pending, .paused:
@@ -73,6 +78,7 @@ final class UploadManager: ObservableObject {
         network.$isConnected
             .sink { [weak self] connected in
                 guard let self else { return }
+                self.isNetworkConnected = connected
 
                 if !connected {
                     self.diagnostics.log("network_offline pausing_active_uploads=\(self.activeClients.count)")
@@ -101,6 +107,10 @@ final class UploadManager: ObservableObject {
                             }
                         }
                     }
+                }
+
+                if connected {
+                    self.diagnostics.log("network_online scheduling_pending=true")
                     self.schedule()
                 }
             }
@@ -163,6 +173,8 @@ final class UploadManager: ObservableObject {
 
     // Scheduling: ältestes pending, pausierte blockieren nicht
     func schedule() {
+        guard network.isConnected else { return }
+
         let activeCount = items.filter { $0.status == .uploading }.count
         guard activeCount < maxConcurrent else { return }
 
@@ -206,7 +218,10 @@ final class UploadManager: ObservableObject {
             let client = BunnyUploadClient()
             client.setResumeURL(resumeURL)
             client.onEvent = { [weak self] msg in
-                self?.diagnostics.log("item=\(itemId.uuidString) \(msg)")
+                self?.diagnostics.log("file=\(item.file.lastPathComponent) item=\(itemId.uuidString) \(msg)")
+            }
+            client.onResumeResourceMissing = { [weak self] in
+                self?.invalidateResumeAndQueueFresh(itemId: itemId)
             }
 
             self.activeClients[itemId] = client
@@ -231,7 +246,8 @@ final class UploadManager: ObservableObject {
                         self.markSuccess(itemId: itemId, videoId: existingVideoId)
                     } else {
                         if let idx = self.items.firstIndex(where: { $0.id == itemId }),
-                           self.items[idx].status != .paused {
+                           self.items[idx].status != .paused,
+                           self.items[idx].status != .pending {
                             self.markFailed(itemId: itemId)
                         }
                     }
@@ -265,7 +281,10 @@ final class UploadManager: ObservableObject {
 
             let client = BunnyUploadClient()
             client.onEvent = { [weak self] msg in
-                self?.diagnostics.log("item=\(itemId.uuidString) \(msg)")
+                self?.diagnostics.log("file=\(item.file.lastPathComponent) item=\(itemId.uuidString) \(msg)")
+            }
+            client.onResumeResourceMissing = { [weak self] in
+                self?.invalidateResumeAndQueueFresh(itemId: itemId)
             }
             client.onURLUpdate = { [weak self] url in
                 guard let self else { return }
@@ -303,7 +322,8 @@ final class UploadManager: ObservableObject {
                         self.markSuccess(itemId: itemId, videoId: videoId)
                     } else {
                         if let idx = self.items.firstIndex(where: { $0.id == itemId }),
-                           self.items[idx].status != .paused {
+                           self.items[idx].status != .paused,
+                           self.items[idx].status != .pending {
                             self.markFailed(itemId: itemId)
                         }
                     }
@@ -378,7 +398,7 @@ final class UploadManager: ObservableObject {
 
     func pause(itemId: UUID) {
         guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
-        diagnostics.log("user_pause item=\(itemId.uuidString)")
+        diagnostics.log("user_pause file=\(items[idx].file.lastPathComponent) item=\(itemId.uuidString)")
 
         activeClients[itemId]?.pause()
         activeClients[itemId] = nil
@@ -398,7 +418,7 @@ final class UploadManager: ObservableObject {
 
     func resume(itemId: UUID) {
         guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
-        diagnostics.log("user_resume item=\(itemId.uuidString)")
+        diagnostics.log("user_resume file=\(items[idx].file.lastPathComponent) item=\(itemId.uuidString)")
 
         if items[idx].status == .paused {
             items[idx].status = .pending
@@ -466,6 +486,51 @@ final class UploadManager: ObservableObject {
         }
         items.removeAll { $0.id == itemId }
         persistItems()
+    }
+
+    func retryFailed(itemId: UUID) {
+        guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
+        guard items[idx].status == .failed else { return }
+
+        let filePath = items[idx].file.path
+        if !FileManager.default.fileExists(atPath: filePath) {
+            items[idx].errorMessage = "Local file is missing. Re-add the file to upload again."
+            diagnostics.log("retry_failed_missing_file file=\(items[idx].file.lastPathComponent) item=\(itemId.uuidString)")
+            persistItems()
+            return
+        }
+
+        let attrs = try? FileManager.default.attributesOfItem(atPath: filePath)
+        items[idx].totalBytes = (attrs?[.size] as? NSNumber)?.int64Value ?? items[idx].totalBytes
+        items[idx].errorMessage = nil
+        items[idx].completedAt = nil
+        items[idx].speedMBps = 0
+        items[idx].etaSeconds = 0
+        items[idx].lastProgressAt = nil
+        items[idx].lastResumeAttempt = Date()
+        items[idx].status = .pending
+        diagnostics.log("retry_failed file=\(items[idx].file.lastPathComponent) item=\(itemId.uuidString)")
+
+        acquireSleepAssertionIfNeeded()
+        schedule()
+        persistItems()
+    }
+
+    private func invalidateResumeAndQueueFresh(itemId: UUID) {
+        DispatchQueue.main.async {
+            guard let idx = self.items.firstIndex(where: { $0.id == itemId }) else { return }
+            self.diagnostics.log("retry_fresh_after_missing_remote file=\(self.items[idx].file.lastPathComponent) item=\(itemId.uuidString)")
+            self.items[idx].videoId = nil
+            self.items[idx].tusUploadURL = nil
+            self.items[idx].bytesUploaded = 0
+            self.items[idx].progress = 0
+            self.items[idx].speedMBps = 0
+            self.items[idx].etaSeconds = 0
+            self.items[idx].lastProgressAt = nil
+            self.items[idx].errorMessage = "Remote upload session expired. Starting a fresh upload."
+            self.items[idx].status = .pending
+            self.persistItems()
+        }
     }
 
     // Delete a finished video from Bunny and remove locally
@@ -876,7 +941,7 @@ final class UploadManager: ObservableObject {
     private func markSuccess(itemId: UUID, videoId: String) {
         DispatchQueue.main.async {
             guard let idx = self.items.firstIndex(where: { $0.id == itemId }) else { return }
-            self.diagnostics.log("upload_success item=\(itemId.uuidString) video=\(videoId)")
+            self.diagnostics.log("upload_success file=\(self.items[idx].file.lastPathComponent) item=\(itemId.uuidString) video=\(videoId)")
             self.items[idx].status = .success
             self.items[idx].videoId = videoId
             self.items[idx].progress = 1.0
@@ -892,7 +957,7 @@ final class UploadManager: ObservableObject {
     private func markFailed(itemId: UUID) {
         DispatchQueue.main.async {
             guard let idx = self.items.firstIndex(where: { $0.id == itemId }) else { return }
-            self.diagnostics.log("upload_failed item=\(itemId.uuidString)")
+            self.diagnostics.log("upload_failed file=\(self.items[idx].file.lastPathComponent) item=\(itemId.uuidString)")
             self.items[idx].status = .failed
             self.items[idx].speedMBps = 0
             self.items[idx].etaSeconds = 0
