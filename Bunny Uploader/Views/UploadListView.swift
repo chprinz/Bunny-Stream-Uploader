@@ -31,6 +31,7 @@ struct UploadListView: View {
     @State private var isSyncingLibrary = false
     @State private var scrollAnchorID = "top"
     @State private var thumbnailReloadToken: Int = 0
+    @State private var failedThumbnailIds: Set<UUID> = []
 
     private let recentSuccessWindow: TimeInterval = 2.5
 
@@ -196,6 +197,12 @@ struct UploadListView: View {
                 guard connected else { return }
                 thumbnailReloadToken &+= 1
                 syncHistoryWithRemote()
+            }
+            .onReceive(Timer.publish(every: 20, on: .main, in: .common).autoconnect()) { _ in
+                guard uploads.isNetworkConnected else { return }
+                guard !failedThumbnailIds.isEmpty else { return }
+                // Retry failed thumbnail fetches periodically while online.
+                thumbnailReloadToken &+= 1
             }
             .onAppear {
                 syncHistoryWithRemote()
@@ -553,6 +560,7 @@ struct UploadListView: View {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let image):
+                        failedThumbnailIds.remove(item.id)
                         image
                             .resizable()
                             .scaledToFill()
@@ -562,6 +570,7 @@ struct UploadListView: View {
                             ProgressView().scaleEffect(0.6)
                         }
                     case .failure:
+                        failedThumbnailIds.insert(item.id)
                         shape
                             .fill(Color.primary.opacity(0.05))
                             .overlay(
