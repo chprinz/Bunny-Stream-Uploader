@@ -1,8 +1,12 @@
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#endif
 
 struct SettingsView: View {
 
     @EnvironmentObject private var store: LibraryStore
+    @EnvironmentObject private var uploads: UploadManager
 
     @State private var selectedLibraryID: UUID? = nil
     @State private var nameCache: String = ""
@@ -16,6 +20,7 @@ struct SettingsView: View {
     @State private var newLibName: String = ""
     @State private var newLibID: String = ""
     @State private var newLibKey: String = ""
+    @State private var diagnosticsMessage: String = ""
 
     var selectedLibrary: LibraryConfig? {
         store.libraries.first(where: { $0.id == selectedLibraryID })
@@ -251,6 +256,45 @@ struct SettingsView: View {
             }
             .padding(.top, 8)
 
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Diagnostics")
+                    .font(.headline)
+                    .padding(.horizontal)
+
+                HStack(spacing: 10) {
+                    Button("Open Log") {
+                        openDiagnosticsLog()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Copy Recent") {
+                        let ok = uploads.copyRecentDiagnosticsLines(200)
+                        diagnosticsMessage = ok ? "Copied recent log lines." : "No diagnostics logs yet."
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Clear Log", role: .destructive) {
+                        uploads.clearDiagnosticsLog()
+                        diagnosticsMessage = "Diagnostics log cleared."
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding(.horizontal)
+
+                Text(uploads.diagnosticsLogPath)
+                    .font(.caption2.monospaced())
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
+
+                if !diagnosticsMessage.isEmpty {
+                    Text(diagnosticsMessage)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal)
+                }
+            }
+            .padding(.top, 6)
+
             Spacer()
 
             HStack {
@@ -314,6 +358,18 @@ struct SettingsView: View {
         selectedCollection = store.defaultCollection(for: lib) ?? ""
         pullZoneHostCache = lib.pullZoneHost ?? ""
         store.loadCollections(for: lib)
+    }
+
+    private func openDiagnosticsLog() {
+        let url = URL(fileURLWithPath: uploads.diagnosticsLogPath)
+#if canImport(AppKit)
+        if FileManager.default.fileExists(atPath: url.path) {
+            NSWorkspace.shared.open(url)
+            diagnosticsMessage = ""
+        } else {
+            diagnosticsMessage = "Log file does not exist yet."
+        }
+#endif
     }
 
 }

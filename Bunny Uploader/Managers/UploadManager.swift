@@ -10,6 +10,9 @@ import Combine
 import SwiftUI
 import UserNotifications
 import IOKit.pwr_mgt
+#if canImport(AppKit)
+import AppKit
+#endif
 
 final class UploadManager: ObservableObject {
 
@@ -20,6 +23,8 @@ final class UploadManager: ObservableObject {
     private let network = NetworkMonitor()
     private var cancellables = Set<AnyCancellable>()
     private let telemetryStaleAfter: TimeInterval = 5
+    private let noProgressHintAfter: TimeInterval = 120
+    private let diagnostics = DiagnosticsLogStore()
 
     // Stabil für 4G: 1 Upload gleichzeitig
     private let maxConcurrent = 1
@@ -70,6 +75,7 @@ final class UploadManager: ObservableObject {
                 guard let self else { return }
 
                 if !connected {
+                    self.diagnostics.log("network_offline pausing_active_uploads=\(self.activeClients.count)")
                     let now = Date()
                     for itemId in Array(self.activeClients.keys) {
                         if let idx = self.items.firstIndex(where: { $0.id == itemId }) {
@@ -87,6 +93,7 @@ final class UploadManager: ObservableObject {
                 }
 
                 if connected && self.autoResumeUploads {
+                    self.diagnostics.log("network_online auto_resume=true")
                     for i in self.items.indices {
                         if self.items[i].status == .paused {
                             if self.items[i].lastResumeAttempt != nil {
@@ -189,6 +196,7 @@ final class UploadManager: ObservableObject {
         }
 
         items[idx].status = .uploading
+        items[idx].lastProgressAt = Date()
         acquireSleepAssertionIfNeeded()
 
         // RESUME PATH: if we already have a videoId and TUS upload URL, do NOT create a new video
@@ -197,6 +205,9 @@ final class UploadManager: ObservableObject {
 
             let client = BunnyUploadClient()
             client.setResumeURL(resumeURL)
+            client.onEvent = { [weak self] msg in
+                self?.diagnostics.log("item=\(itemId.uuidString) \(msg)")
+            }
 
             self.activeClients[itemId] = client
 
@@ -253,6 +264,9 @@ final class UploadManager: ObservableObject {
             }
 
             let client = BunnyUploadClient()
+            client.onEvent = { [weak self] msg in
+                self?.diagnostics.log("item=\(itemId.uuidString) \(msg)")
+            }
             client.onURLUpdate = { [weak self] url in
                 guard let self else { return }
                 if let i = self.items.firstIndex(where: { $0.id == itemId }) {
@@ -364,6 +378,7 @@ final class UploadManager: ObservableObject {
 
     func pause(itemId: UUID) {
         guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
+        diagnostics.log("user_pause item=\(itemId.uuidString)")
 
         activeClients[itemId]?.pause()
         activeClients[itemId] = nil
@@ -383,6 +398,7 @@ final class UploadManager: ObservableObject {
 
     func resume(itemId: UUID) {
         guard let idx = items.firstIndex(where: { $0.id == itemId }) else { return }
+        diagnostics.log("user_resume item=\(itemId.uuidString)")
 
         if items[idx].status == .paused {
             items[idx].status = .pending
@@ -860,6 +876,7 @@ final class UploadManager: ObservableObject {
     private func markSuccess(itemId: UUID, videoId: String) {
         DispatchQueue.main.async {
             guard let idx = self.items.firstIndex(where: { $0.id == itemId }) else { return }
+            self.diagnostics.log("upload_success item=\(itemId.uuidString) video=\(videoId)")
             self.items[idx].status = .success
             self.items[idx].videoId = videoId
             self.items[idx].progress = 1.0
@@ -875,6 +892,7 @@ final class UploadManager: ObservableObject {
     private func markFailed(itemId: UUID) {
         DispatchQueue.main.async {
             guard let idx = self.items.firstIndex(where: { $0.id == itemId }) else { return }
+            self.diagnostics.log("upload_failed item=\(itemId.uuidString)")
             self.items[idx].status = .failed
             self.items[idx].speedMBps = 0
             self.items[idx].etaSeconds = 0
@@ -908,6 +926,36 @@ final class UploadManager: ObservableObject {
         if changed {
             objectWillChange.send()
         }
+    }
+
+    func noProgressHint(for item: UploadItem) -> String? {
+        guard item.status == .uploading else { return nil }
+        guard network.isConnected else { return nil }
+        guard let last = item.lastProgressAt else { return nil }
+        let elapsed = Date().timeIntervalSince(last)
+        guard elapsed >= noProgressHintAfter else { return nil }
+        let minutes = max(1, Int(elapsed / 60))
+        return "No progress for \(minutes)m"
+    }
+
+    var diagnosticsLogPath: String {
+        diagnostics.logURL.path
+    }
+
+    func clearDiagnosticsLog() {
+        diagnostics.clear()
+    }
+
+    func copyRecentDiagnosticsLines(_ maxLines: Int = 200) -> Bool {
+        let text = diagnostics.readRecentLines(maxLines)
+        guard !text.isEmpty else { return false }
+#if canImport(AppKit)
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        return pb.setString(text, forType: .string)
+#else
+        return false
+#endif
     }
 
     // MARK: - Sleep Control
@@ -990,6 +1038,83 @@ final class UploadManager: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
                 self.pollProcessingReady(itemId: itemId, attempt: attempt + 1)
             }
+        }
+    }
+}
+
+private final class DiagnosticsLogStore {
+    let logURL: URL
+    private let queue = DispatchQueue(label: "BunnyUploader.DiagnosticsLog")
+    private let maxBytes = 2 * 1024 * 1024
+    private let backups = 2
+
+    init() {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appDir = dir.appendingPathComponent("BunnyUploader", isDirectory: true)
+        try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+        logURL = appDir.appendingPathComponent("upload.log")
+    }
+
+    func log(_ message: String) {
+        queue.async {
+            self.rotateIfNeeded()
+            let ts = ISO8601DateFormatter().string(from: Date())
+            let line = "[\(ts)] \(message)\n"
+            guard let data = line.data(using: .utf8) else { return }
+            if FileManager.default.fileExists(atPath: self.logURL.path) {
+                if let handle = try? FileHandle(forWritingTo: self.logURL) {
+                    do {
+                        try handle.seekToEnd()
+                        try handle.write(contentsOf: data)
+                        try handle.close()
+                    } catch {
+                        try? handle.close()
+                    }
+                }
+            } else {
+                try? data.write(to: self.logURL, options: [.atomic])
+            }
+        }
+    }
+
+    func clear() {
+        queue.sync {
+            try? FileManager.default.removeItem(at: logURL)
+            for i in 1...backups {
+                try? FileManager.default.removeItem(at: logURL.appendingPathExtension("\(i)"))
+            }
+        }
+    }
+
+    func readRecentLines(_ maxLines: Int) -> String {
+        queue.sync {
+            guard let data = try? Data(contentsOf: logURL),
+                  let text = String(data: data, encoding: .utf8) else { return "" }
+            let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+            guard !lines.isEmpty else { return "" }
+            return lines.suffix(maxLines).joined(separator: "\n")
+        }
+    }
+
+    private func rotateIfNeeded() {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: logURL.path)
+        let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
+        guard size >= maxBytes else { return }
+
+        for i in stride(from: backups, through: 1, by: -1) {
+            let old = logURL.appendingPathExtension("\(i)")
+            let next = logURL.appendingPathExtension("\(i + 1)")
+            if i == backups {
+                try? FileManager.default.removeItem(at: old)
+            } else if FileManager.default.fileExists(atPath: old.path) {
+                try? FileManager.default.removeItem(at: next)
+                try? FileManager.default.moveItem(at: old, to: next)
+            }
+        }
+        let firstBackup = logURL.appendingPathExtension("1")
+        try? FileManager.default.removeItem(at: firstBackup)
+        if FileManager.default.fileExists(atPath: logURL.path) {
+            try? FileManager.default.moveItem(at: logURL, to: firstBackup)
         }
     }
 }

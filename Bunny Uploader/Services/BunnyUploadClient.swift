@@ -30,6 +30,7 @@ final class BunnyUploadClient: NSObject {
 
     /// Callback fired once the TUS upload URL is known (used for persisting resume state)
     var onURLUpdate: ((URL) -> Void)?
+    var onEvent: ((String) -> Void)?
 
     /// Current in-flight request task (useful for hard cancel)
     private(set) var task: URLSessionTask?
@@ -251,7 +252,7 @@ final class BunnyUploadClient: NSObject {
                 return
             }
 
-            print("TUS create unexpected status:", http.statusCode)
+            self.logEvent("create_unexpected_status status=\(http.statusCode)")
             self.finish(false)
         }
         task?.resume()
@@ -449,7 +450,7 @@ final class BunnyUploadClient: NSObject {
                 // Bunny may temporarily lock uploads and respond with 423 after a network hiccup.
                 // In that case, wait briefly and re-sync via HEAD instead of failing the upload.
                 if http.statusCode == 423 {
-                    print("TUS PATCH locked (423), retrying via HEAD…")
+                    self.logEvent("patch_locked_423 resync_head=true")
                     self.workQ.asyncAfter(deadline: .now() + 1.0) {
                         if self.isPaused || self.isFinished { return }
                         self.fetchOffsetAndUpload(attempt: 0)
@@ -465,7 +466,7 @@ final class BunnyUploadClient: NSObject {
                     return
                 }
 
-                print("TUS PATCH unexpected status:", http.statusCode)
+                self.logEvent("patch_unexpected_status status=\(http.statusCode) attempt=\(attempt)")
                 self.retryOrFail(stage: "patch_status_\(http.statusCode)", attempt: attempt) {
                     self.patchChunk(fromOffset: offset, attempt: attempt + 1)
                 }
@@ -526,7 +527,7 @@ final class BunnyUploadClient: NSObject {
                  NSURLErrorNotConnectedToInternet,
                  NSURLErrorTimedOut:
                 // Let stage-specific retry logic decide recovery path.
-                print("TUS transient network error (\(ns.code))")
+                logEvent("network_transient_error code=\(ns.code)")
                 return false
 
             default:
@@ -540,12 +541,15 @@ final class BunnyUploadClient: NSObject {
         if isPaused || isFinished { return }
 
         if attempt >= retryDelays.count {
-            print("TUS retry exhausted at stage:", stage)
+            logEvent("retry_exhausted stage=\(stage)")
             finish(false)
             return
         }
 
         let delay = retryDelays[attempt]
+        if attempt > 0 || stage.contains("status_") || stage.contains("auth") {
+            logEvent("retry_scheduled stage=\(stage) attempt=\(attempt) delay=\(Int(delay))s")
+        }
         workQ.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self else { return }
             if self.isPaused || self.isFinished { return }
@@ -586,7 +590,7 @@ final class BunnyUploadClient: NSObject {
                 let idle = Date().timeIntervalSince(self.lastActivityAt)
                 guard idle >= self.stallTimeout else { return }
                 guard self.task != nil else { return }
-                print("TUS stalled for \(Int(idle))s, forcing offset re-sync")
+                self.logEvent("stall_detected idle=\(Int(idle))s force_resync=true")
                 self.recoveryCancelInFlight = true
                 self.task?.cancel()
                 self.task = nil
@@ -607,5 +611,10 @@ final class BunnyUploadClient: NSObject {
     private func stopStallWatchdogLocked() {
         stallTimer?.cancel()
         stallTimer = nil
+    }
+
+    private func logEvent(_ message: String) {
+        print("TUS \(message)")
+        onEvent?(message)
     }
 }

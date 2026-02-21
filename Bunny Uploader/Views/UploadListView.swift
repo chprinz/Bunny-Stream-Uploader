@@ -606,6 +606,9 @@ struct UploadListView: View {
 
     private func statusLine(for item: UploadItem) -> String {
         if item.status == .uploading {
+            if let hint = uploads.noProgressHint(for: item) {
+                return "\(Int(item.progress * 100))% · \(hint)"
+            }
             return "\(Int(item.progress * 100))% · \(String(format: "%.1f", item.speedMBps)) MB/s · ETA \(item.etaFormatted)"
         }
         if isProcessing(item) {
