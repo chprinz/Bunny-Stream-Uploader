@@ -30,20 +30,22 @@ struct UploadListView: View {
     @State private var hoveredThumbId: UUID? = nil
     @State private var hoveredTitleId: UUID? = nil
     @State private var isSyncingLibrary = false
+    @State private var lastLibrarySyncAt: Date? = nil
     @State private var scrollAnchorID = "top"
     @State private var failedThumbnailReloadToken: Int = 0
     @State private var failedThumbnailIds: Set<UUID> = []
-
-    private let recentSuccessWindow: TimeInterval = 2.5
+    private let libraryAutoSyncInterval: TimeInterval = 20
 
     private var activeItems: [UploadItem] {
         uploads.items.filter { item in
             if let libId = selectedLibraryId {
-                let isRecentSuccess = item.status == .success &&
-                    (item.completedAt ?? item.createdAt) > Date().addingTimeInterval(-recentSuccessWindow)
-
-                return item.libraryConfigId == libId.uuidString &&
-                    (item.status != .success && item.status != .failed || isRecentSuccess)
+                guard item.libraryConfigId == libId.uuidString else { return false }
+                if item.status == .failed || item.status == .canceled { return false }
+                if item.status == .success {
+                    if isRemoteProcessingFailed(item) { return false }
+                    return !isReadyForLibrary(item)
+                }
+                return true
             } else {
                 return false
             }
@@ -53,11 +55,12 @@ struct UploadListView: View {
     private var historyItems: [UploadItem] {
         uploads.items.filter { item in
             if let libId = selectedLibraryId {
-                let isRecentSuccess = item.status == .success &&
-                    (item.completedAt ?? item.createdAt) > Date().addingTimeInterval(-recentSuccessWindow)
-                return item.libraryConfigId == libId.uuidString &&
-                    (item.status == .success || item.status == .failed) &&
-                    !isRecentSuccess
+                guard item.libraryConfigId == libId.uuidString else { return false }
+                if item.status == .failed { return true }
+                if item.status == .success {
+                    return isReadyForLibrary(item) || isRemoteProcessingFailed(item)
+                }
+                return false
             } else {
                 return false
             }
@@ -204,6 +207,15 @@ struct UploadListView: View {
                 guard !failedThumbnailIds.isEmpty else { return }
                 // Retry failed thumbnail fetches periodically while online.
                 failedThumbnailReloadToken &+= 1
+            }
+            .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in
+                guard showHistory else { return }
+                guard uploads.isNetworkConnected else { return }
+                guard !isSyncingLibrary else { return }
+                if let last = lastLibrarySyncAt, Date().timeIntervalSince(last) < libraryAutoSyncInterval {
+                    return
+                }
+                syncHistoryWithRemote()
             }
             .onAppear {
                 syncHistoryWithRemote()
@@ -441,32 +453,38 @@ struct UploadListView: View {
     }
 
     private func thumbnailURL(for item: UploadItem) -> URL? {
-        guard item.status == .success,
-              let raw = item.remoteThumbnailPath?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty else { return nil }
-
-        if let direct = URL(string: raw), direct.scheme != nil {
-            return direct
-        }
-
+        guard item.status == .success else { return nil }
         guard let videoId = item.videoId else { return nil }
         guard let lib = library(for: item),
               let base = store.thumbnailBaseURL(for: lib) else { return nil }
 
-        let cleaned = raw.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard !cleaned.isEmpty else { return nil }
-
-        var url = base
-        let components = cleaned.split(separator: "/")
-        if components.count > 1 {
-            for comp in components {
-                url.appendPathComponent(String(comp))
+        let raw = item.remoteThumbnailPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !raw.isEmpty {
+            if let direct = URL(string: raw), direct.scheme != nil {
+                return direct
             }
+
+            let cleaned = raw.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !cleaned.isEmpty else { return nil }
+
+            var url = base
+            let components = cleaned.split(separator: "/")
+            if components.count > 1 {
+                for comp in components {
+                    url.appendPathComponent(String(comp))
+                }
+                return url
+            }
+
+            url.appendPathComponent(videoId)
+            url.appendPathComponent(cleaned)
             return url
         }
 
+        // Fallback while Bunny is still publishing metadata: predictable default thumbnail path.
+        var url = base
         url.appendPathComponent(videoId)
-        url.appendPathComponent(cleaned)
+        url.appendPathComponent("thumbnail.jpg")
         return url
     }
 
@@ -697,6 +715,9 @@ struct UploadListView: View {
         if isRemoteProcessingFailed(item) {
             return "Processing failed on Bunny"
         }
+        if isRemoteUploading(item) {
+            return "Uploading on Bunny…"
+        }
         if isProcessing(item) {
             let state = BunnyProcessingState.from(statusCode: item.remoteStatusCode)
             let stage = state.label
@@ -712,6 +733,7 @@ struct UploadListView: View {
         let processing = isProcessing(item)
         let text: String = {
             if isRemoteProcessingFailed(item) { return "Failed" }
+            if isRemoteUploading(item) { return "Uploading" }
             if processing { return processingLabel(for: item) }
             if item.status == .pending && !uploads.isNetworkConnected { return "Waiting" }
             return item.status.uiLabel
@@ -720,6 +742,9 @@ struct UploadListView: View {
         let palette: (Color, Color) = {
             if isRemoteProcessingFailed(item) {
                 return (Color.red.opacity(0.18), Color.red)
+            }
+            if isRemoteUploading(item) {
+                return (Color.blue.opacity(0.15), Color.blue)
             }
             if processing {
                 return (Color.orange.opacity(0.18), Color.orange)
@@ -757,6 +782,7 @@ struct UploadListView: View {
         let timestamp = formatter.string(from: date)
         let label: String = {
             if isRemoteProcessingFailed(item) { return "Failed" }
+            if isRemoteUploading(item) { return "Uploading" }
             if isProcessing(item) { return processingLabel(for: item) }
             return item.status.uiLabel
         }()
@@ -778,6 +804,7 @@ struct UploadListView: View {
     private func isProcessing(_ item: UploadItem) -> Bool {
         guard item.status == .success else { return false }
         let state = BunnyProcessingState.from(statusCode: item.remoteStatusCode)
+        if state == .uploaded { return false }
         if state.indicatesReady { return false }
         if state == .failed { return false }
         if let prog = item.remoteEncodeProgress {
@@ -792,6 +819,20 @@ struct UploadListView: View {
         return BunnyProcessingState.from(statusCode: item.remoteStatusCode) == .failed
     }
 
+    private func isReadyForLibrary(_ item: UploadItem) -> Bool {
+        guard item.status == .success else { return false }
+        if isRemoteProcessingFailed(item) { return false }
+        let state = BunnyProcessingState.from(statusCode: item.remoteStatusCode)
+        if state.indicatesReady { return true }
+        if let prog = item.remoteEncodeProgress, prog >= 100 { return true }
+        return item.processingReadyNotified
+    }
+
+    private func isRemoteUploading(_ item: UploadItem) -> Bool {
+        guard item.status == .success else { return false }
+        return BunnyProcessingState.from(statusCode: item.remoteStatusCode) == .uploaded
+    }
+
     private func processingLabel(for item: UploadItem) -> String {
         BunnyProcessingState.from(statusCode: item.remoteStatusCode).label
     }
@@ -801,6 +842,7 @@ struct UploadListView: View {
               let lib = store.libraries.first(where: { $0.id == libId }) else { return }
 
         isSyncingLibrary = true
+        lastLibrarySyncAt = Date()
         uploads.syncLibrary(lib) {
             DispatchQueue.main.async {
                 isSyncingLibrary = false

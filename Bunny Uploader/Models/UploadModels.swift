@@ -44,7 +44,7 @@ enum BunnyProcessingState {
 
     var label: String {
         switch self {
-        case .uploaded: return "Uploaded"
+        case .uploaded: return "Uploading"
         case .processing: return "Processing"
         case .transcoding: return "Transcoding"
         case .finished: return "Ready"

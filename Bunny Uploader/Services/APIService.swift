@@ -136,7 +136,9 @@ final class APIService {
 
         session.dataTask(with: req) { _, response, error in
             self.logResponse("deleteVideo", data: nil, response: response, error: error)
-            let ok = (error == nil) && ((response as? HTTPURLResponse)?.statusCode == 200)
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            // Treat delete as idempotent: if the video is already gone (404), local removal should still proceed.
+            let ok = (error == nil) && ((200..<300).contains(code) || code == 404)
             completion(ok)
         }.resume()
     }

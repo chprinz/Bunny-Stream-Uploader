@@ -219,53 +219,17 @@ final class UploadManager: ObservableObject {
         items[idx].lastProgressAt = Date()
         acquireSleepAssertionIfNeeded()
 
-        // RESUME PATH: if we already have a videoId and TUS upload URL, do NOT create a new video
-        if let resumeURL = items[idx].tusUploadURL,
-           let existingVideoId = items[idx].videoId {
-
-            let client = BunnyUploadClient()
-            client.setResumeURL(resumeURL)
-            client.onEvent = { [weak self] msg in
-                self?.logTusEvent(fileName: item.file.lastPathComponent, raw: msg)
-            }
-            client.onResumeResourceMissing = { [weak self] in
-                self?.invalidateResumeAndQueueFresh(itemId: itemId)
-            }
-
-            self.activeClients[itemId] = client
-
-            client.startTusUpload(
+        // RESUME/CONTINUE PATH: if a video already exists, always continue with that videoId.
+        // Even without a persisted TUS URL this prevents creating a duplicate Bunny video.
+        if let existingVideoId = items[idx].videoId {
+            startUploadClient(
+                itemId: itemId,
                 file: item.file,
                 libraryId: item.libraryId,
                 videoId: existingVideoId,
                 streamKey: apiKey,
-                progress: { [weak self] prog, mbps, eta in
-                    guard let self else { return }
-                    self.updateMetrics(itemId: itemId, progress: prog, mbps: mbps, eta: eta)
-
-                    if let idx = self.items.firstIndex(where: { $0.id == itemId }) {
-                        self.items[idx].bytesUploaded = Int64(prog * Double(self.items[idx].totalBytes))
-                    }
-                },
-                completion: { [weak self] success in
-                    guard let self else { return }
-
-                    if success {
-                        self.markSuccess(itemId: itemId, videoId: existingVideoId)
-                    } else {
-                        if let idx = self.items.firstIndex(where: { $0.id == itemId }),
-                           self.items[idx].status != .paused,
-                           self.items[idx].status != .pending {
-                            self.markFailed(itemId: itemId)
-                        }
-                    }
-
-                    self.activeClients[itemId] = nil
-                    self.releaseSleepAssertionIfNeeded()
-                    self.schedule()
-                }
+                resumeURL: items[idx].tusUploadURL
             )
-
             return
         }
 
@@ -287,45 +251,89 @@ final class UploadManager: ObservableObject {
                 return
             }
 
-            let client = BunnyUploadClient()
-            client.onEvent = { [weak self] msg in
-                self?.logTusEvent(fileName: item.file.lastPathComponent, raw: msg)
-            }
-            client.onResumeResourceMissing = { [weak self] in
-                self?.invalidateResumeAndQueueFresh(itemId: itemId)
-            }
-            client.onURLUpdate = { [weak self] url in
-                guard let self else { return }
-                if let i = self.items.firstIndex(where: { $0.id == itemId }) {
-                    DispatchQueue.main.async {
-                        self.items[i].tusUploadURL = url
-                    }
-                }
-            }
-
-            if let storedURL = self.items[idx].tusUploadURL {
-                client.setResumeURL(storedURL)
-            }
-
-            self.activeClients[itemId] = client
-
-            // NEW UPLOAD PATH
-            client.startTusUpload(
+            self.startUploadClient(
+                itemId: itemId,
                 file: item.file,
                 libraryId: item.libraryId,
                 videoId: videoId,
                 streamKey: apiKey,
-                progress: { [weak self] prog, mbps, eta in
-                    guard let self else { return }
-                    self.updateMetrics(itemId: itemId, progress: prog, mbps: mbps, eta: eta)
+                resumeURL: nil
+            )
+        }
+    }
 
+    private func startUploadClient(
+        itemId: UUID,
+        file: URL,
+        libraryId: String,
+        videoId: String,
+        streamKey: String,
+        resumeURL: URL?
+    ) {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async {
+                self.startUploadClient(
+                    itemId: itemId,
+                    file: file,
+                    libraryId: libraryId,
+                    videoId: videoId,
+                    streamKey: streamKey,
+                    resumeURL: resumeURL
+                )
+            }
+            return
+        }
+
+        let client = BunnyUploadClient()
+        client.onEvent = { [weak self] msg in
+            self?.logTusEvent(fileName: file.lastPathComponent, raw: msg)
+        }
+        client.onResumeResourceMissing = { [weak self] in
+            self?.invalidateResumeAndQueueFresh(itemId: itemId)
+        }
+        client.onURLUpdate = { [weak self] url in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                if let i = self.items.firstIndex(where: { $0.id == itemId }) {
+                    self.items[i].tusUploadURL = url
+                    self.persistItems()
+                }
+            }
+        }
+
+        if let resumeURL {
+            client.setResumeURL(resumeURL)
+        }
+
+        if let i = items.firstIndex(where: { $0.id == itemId }) {
+            items[i].videoId = videoId
+            items[i].completedAt = nil
+            if items[i].tusUploadURL == nil {
+                items[i].tusUploadURL = resumeURL
+            }
+            persistItems()
+        }
+
+        activeClients[itemId] = client
+
+        client.startTusUpload(
+            file: file,
+            libraryId: libraryId,
+            videoId: videoId,
+            streamKey: streamKey,
+            progress: { [weak self] prog, mbps, eta in
+                guard let self else { return }
+                self.updateMetrics(itemId: itemId, progress: prog, mbps: mbps, eta: eta)
+
+                DispatchQueue.main.async {
                     if let idx = self.items.firstIndex(where: { $0.id == itemId }) {
                         self.items[idx].bytesUploaded = Int64(prog * Double(self.items[idx].totalBytes))
                     }
-                },
-                completion: { [weak self] success in
-                    guard let self else { return }
-
+                }
+            },
+            completion: { [weak self] success in
+                guard let self else { return }
+                DispatchQueue.main.async {
                     if success {
                         self.markSuccess(itemId: itemId, videoId: videoId)
                     } else {
@@ -340,17 +348,8 @@ final class UploadManager: ObservableObject {
                     self.releaseSleepAssertionIfNeeded()
                     self.schedule()
                 }
-            )
-
-            DispatchQueue.main.async {
-                self.activeClients[itemId] = client
-                if let i = self.items.firstIndex(where: { $0.id == itemId }) {
-                    self.items[i].videoId = videoId
-                    self.items[i].completedAt = nil
-                    self.items[i].tusUploadURL = client.uploadURL
-                }
             }
-        }
+        )
     }
 
     // Cancel / Remove mit Delete-Logik für Bunny
