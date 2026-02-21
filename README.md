@@ -32,6 +32,7 @@ Try this first:
 If it’s still blocked:
 - **System Settings → Privacy & Security** → scroll down → **Open Anyway**
 
+
 ### Option B: Build it yourself (for developers)
 Scroll down to **For Developers**.
 
