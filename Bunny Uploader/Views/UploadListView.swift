@@ -616,9 +616,17 @@ struct UploadListView: View {
                         shape
                             .fill(Color.primary.opacity(0.05))
                             .overlay(
-                                Image(systemName: "video.slash")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundColor(.secondary.opacity(0.6))
+                                VStack(spacing: 3) {
+                                    Image(systemName: "video.slash")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundColor(.secondary.opacity(0.6))
+                                    Text("Preview unavailable")
+                                        .font(.system(size: 8, weight: .medium))
+                                        .foregroundColor(.secondary.opacity(0.85))
+                                        .multilineTextAlignment(.center)
+                                        .lineLimit(2)
+                                        .padding(.horizontal, 6)
+                                }
                             )
                             .onAppear {
                                 failedThumbnailIds.insert(item.id)
@@ -679,6 +687,11 @@ struct UploadListView: View {
         .onHover { hovering in
             hoveredThumbId = hovering ? item.id : (hoveredThumbId == item.id ? nil : hoveredThumbId)
         }
+        .help(
+            failedThumbnailIds.contains(item.id)
+                ? "Thumbnail blocked. Disable \"Block direct URL file access\" in Bunny Stream Security."
+                : "Change thumbnail"
+        )
         .disabled(item.videoId == nil)
     }
 

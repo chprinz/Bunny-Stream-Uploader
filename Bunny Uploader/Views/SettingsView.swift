@@ -181,6 +181,22 @@ struct SettingsView: View {
                         Text("Optional. Use your pull zone host, e.g. vz-12345.b-cdn.net")
                             .font(.caption2)
                             .foregroundColor(.secondary)
+
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "info.circle")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .padding(.top, 1)
+                            Text("No thumbnail preview? Disable \"Block direct URL file access\" in Bunny Stream Security.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.top, 2)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(Color.primary.opacity(0.04))
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     }
 
                     // Default Collection (Dropdown)
