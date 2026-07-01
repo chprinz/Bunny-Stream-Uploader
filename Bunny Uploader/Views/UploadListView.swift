@@ -281,22 +281,28 @@ struct UploadListView: View {
                                 .disabled(item.videoId == nil && item.status != .success)
                                 .opacity(item.videoId == nil && item.status != .success ? 0.3 : 1.0)
                             }
+                        } else if isProcessing(item) {
+                            controlButton(
+                                systemName: "arrow.clockwise",
+                                action: { uploads.refreshProcessingStatus(itemId: item.id) },
+                                hint: "Refresh status now"
+                            )
                         }
                     }
                 }
 
-                if item.status == .success {
-                    if let vid = item.videoId {
-                        Text(vid)
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                            .textSelection(.enabled)
-                    }
-                } else {
+                if item.status != .success {
                     ProgressView(value: item.progress)
                         .progressViewStyle(.linear)
                         .frame(height: 8)
                         .tint(Color("AccentColor").opacity(0.85))
+                }
+
+                if let vid = item.videoId {
+                    Text(vid)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .textSelection(.enabled)
                 }
             }
         }

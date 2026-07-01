@@ -32,6 +32,9 @@ final class BunnyUploadClient: NSObject {
     var onURLUpdate: ((URL) -> Void)?
     var onEvent: ((String) -> Void)?
     var onResumeResourceMissing: (() -> Void)?
+    /// Fired only when the Bunny video object itself is gone (not just the TUS session) —
+    /// e.g. a 404 while creating a fresh TUS upload session for the videoId.
+    var onVideoMissing: (() -> Void)?
 
     /// Current in-flight request task (useful for hard cancel)
     private(set) var task: URLSessionTask?
@@ -250,6 +253,14 @@ final class BunnyUploadClient: NSObject {
             if http.statusCode == 401 || http.statusCode == 403 {
                 self.invalidateAuthHeaders()
                 self.retryOrFail(stage: "create_auth_\(http.statusCode)", attempt: attempt) { self.createTusUpload(attempt: attempt + 1) }
+                return
+            }
+
+            // videoId itself is unknown to Bunny (distinct from a stale/expired TUS session).
+            if http.statusCode == 404 {
+                self.logEvent("create_video_missing status=404")
+                self.onVideoMissing?()
+                self.finish(false)
                 return
             }
 

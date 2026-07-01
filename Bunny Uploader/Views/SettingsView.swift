@@ -260,6 +260,20 @@ struct SettingsView: View {
                     .font(.headline)
                     .padding(.horizontal)
 
+                Toggle(isOn: Binding(
+                    get: { store.keepAwake },
+                    set: { store.setKeepAwake($0) }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Keep Mac awake while uploading")
+                            .font(.body)
+                        Text("Prevents idle sleep while uploads are active. Does not override sleep when the lid is closed.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.horizontal)
+
                 Toggle(isOn: $autoResumeUploads) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Auto-resume uploads")

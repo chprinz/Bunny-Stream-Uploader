@@ -124,7 +124,7 @@ final class UploadManager: ObservableObject {
             }
             .store(in: &cancellables)
 
-        Timer.publish(every: 12, on: .main, in: .common)
+        Timer.publish(every: 6, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
                 self?.refreshProcessingStatuses()
@@ -291,6 +291,9 @@ final class UploadManager: ObservableObject {
         client.onResumeResourceMissing = { [weak self] in
             self?.invalidateResumeAndQueueFresh(itemId: itemId)
         }
+        client.onVideoMissing = { [weak self] in
+            self?.invalidateVideoAndQueueFresh(itemId: itemId)
+        }
         client.onURLUpdate = { [weak self] url in
             guard let self else { return }
             DispatchQueue.main.async {
@@ -306,6 +309,9 @@ final class UploadManager: ObservableObject {
         }
 
         if let i = items.firstIndex(where: { $0.id == itemId }) {
+            if items[i].videoId != videoId {
+                diagnostics.log("Video created: \(items[i].file.lastPathComponent) (video \(videoId))")
+            }
             items[i].videoId = videoId
             items[i].completedAt = nil
             if items[i].tusUploadURL == nil {
@@ -523,10 +529,32 @@ final class UploadManager: ObservableObject {
         persistItems()
     }
 
+    // TUS upload session expired/missing (404/410), but the Bunny video object itself
+    // still exists — request a new TUS session for the SAME videoId. Clearing videoId here
+    // would force createVideo() to run again on the next start(), creating an orphaned
+    // duplicate video on Bunny for every retry.
     private func invalidateResumeAndQueueFresh(itemId: UUID) {
         DispatchQueue.main.async {
             guard let idx = self.items.firstIndex(where: { $0.id == itemId }) else { return }
-            self.diagnostics.log("Remote resumable session missing. Restarting as fresh upload: \(self.items[idx].file.lastPathComponent)")
+            self.diagnostics.log("Resumable session expired. Requesting a new upload session for the same video: \(self.items[idx].file.lastPathComponent)")
+            self.items[idx].tusUploadURL = nil
+            self.items[idx].bytesUploaded = 0
+            self.items[idx].progress = 0
+            self.items[idx].speedMBps = 0
+            self.items[idx].etaSeconds = 0
+            self.items[idx].lastProgressAt = nil
+            self.items[idx].errorMessage = "Remote upload session expired. Resuming with a fresh session."
+            self.items[idx].status = .pending
+            self.persistItems()
+        }
+    }
+
+    // The Bunny video object itself is gone (rare — e.g. deleted remotely). Unlike
+    // invalidateResumeAndQueueFresh, this must clear videoId so a new video gets created.
+    private func invalidateVideoAndQueueFresh(itemId: UUID) {
+        DispatchQueue.main.async {
+            guard let idx = self.items.firstIndex(where: { $0.id == itemId }) else { return }
+            self.diagnostics.log("Remote video no longer exists. Creating a new video: \(self.items[idx].file.lastPathComponent)")
             self.items[idx].videoId = nil
             self.items[idx].tusUploadURL = nil
             self.items[idx].bytesUploaded = 0
@@ -534,7 +562,7 @@ final class UploadManager: ObservableObject {
             self.items[idx].speedMBps = 0
             self.items[idx].etaSeconds = 0
             self.items[idx].lastProgressAt = nil
-            self.items[idx].errorMessage = "Remote upload session expired. Starting a fresh upload."
+            self.items[idx].errorMessage = "Remote video was missing. Starting a fresh upload."
             self.items[idx].status = .pending
             self.persistItems()
         }
@@ -1190,7 +1218,7 @@ final class UploadManager: ObservableObject {
         targetIDs.forEach(refreshProcessingStatus)
     }
 
-    private func refreshProcessingStatus(itemId: UUID) {
+    func refreshProcessingStatus(itemId: UUID) {
         guard !processingRefreshInFlight.contains(itemId) else { return }
         processingRefreshInFlight.insert(itemId)
         refreshVideoDetails(itemId: itemId) { [weak self] _ in
