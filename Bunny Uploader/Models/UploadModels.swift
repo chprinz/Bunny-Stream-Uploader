@@ -249,3 +249,59 @@ struct UploadItem: Identifiable, Codable {
         remoteTitle?.isEmpty == false ? (remoteTitle ?? "") : file.lastPathComponent
     }
 }
+
+// MARK: - Chapters
+
+struct VideoChapter: Equatable {
+    var title: String
+    var start: Int   // seconds
+}
+
+enum ChapterParser {
+    struct ParseError: Error { let message: String }
+
+    /// Parses lines like "00:25 Title" or "1:02:03 Title" (mm:ss or hh:mm:ss).
+    static func parse(_ text: String) -> Result<[VideoChapter], ParseError> {
+        var chapters: [VideoChapter] = []
+        let lines = text.split(whereSeparator: \.isNewline)
+        for (i, raw) in lines.enumerated() {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+            let parts = line.split(maxSplits: 1, whereSeparator: { $0 == " " || $0 == "\t" })
+            guard parts.count == 2 else {
+                return .failure(ParseError(message: "Line \(i + 1): expected \"mm:ss Title\"."))
+            }
+            guard let secs = seconds(from: String(parts[0])) else {
+                return .failure(ParseError(message: "Line \(i + 1): invalid time \"\(parts[0])\"."))
+            }
+            let title = parts[1].trimmingCharacters(in: .whitespaces)
+            chapters.append(VideoChapter(title: title, start: secs))
+        }
+        guard !chapters.isEmpty else {
+            return .failure(ParseError(message: "No chapters found."))
+        }
+        chapters.sort { $0.start < $1.start }
+        return .success(chapters)
+    }
+
+    private static func seconds(from s: String) -> Int? {
+        let comps = s.split(separator: ":", omittingEmptySubsequences: false)
+        guard comps.count == 2 || comps.count == 3 else { return nil }
+        var nums: [Int] = []
+        for c in comps {
+            guard let n = Int(c), n >= 0 else { return nil }
+            nums.append(n)
+        }
+        if nums.count == 2 {
+            guard nums[1] < 60 else { return nil }
+            return nums[0] * 60 + nums[1]
+        }
+        guard nums[1] < 60, nums[2] < 60 else { return nil }
+        return nums[0] * 3600 + nums[1] * 60 + nums[2]
+    }
+
+    static func format(_ seconds: Int) -> String {
+        let h = seconds / 3600, m = (seconds % 3600) / 60, s = seconds % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
+    }
+}

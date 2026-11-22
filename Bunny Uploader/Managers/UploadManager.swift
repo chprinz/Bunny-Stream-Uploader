@@ -601,6 +601,33 @@ final class UploadManager: ObservableObject {
         }
     }
 
+    func setChapters(itemId: UUID, chapters: [VideoChapter], completion: @escaping (String?) -> Void) {
+        guard let item = items.first(where: { $0.id == itemId }),
+              let videoId = item.videoId,
+              let api = apiService(for: item) else { completion("Missing API key or video"); return }
+        api.updateChapters(libraryId: item.libraryId, videoId: videoId, chapters: chapters) { err in
+            DispatchQueue.main.async { completion(err) }
+        }
+    }
+
+    func addMoments(itemId: UUID, moments: [VideoChapter], completion: @escaping (String?) -> Void) {
+        guard let item = items.first(where: { $0.id == itemId }),
+              let videoId = item.videoId,
+              let api = apiService(for: item) else { completion("Missing API key or video"); return }
+        api.addMoments(libraryId: item.libraryId, videoId: videoId, moments: moments) { err in
+            DispatchQueue.main.async { completion(err) }
+        }
+    }
+
+    func uploadCaptions(itemId: UUID, srclang: String, label: String, vtt: Data, completion: @escaping (String?) -> Void) {
+        guard let item = items.first(where: { $0.id == itemId }),
+              let videoId = item.videoId,
+              let api = apiService(for: item) else { completion("Missing API key or video"); return }
+        api.uploadCaptions(libraryId: item.libraryId, videoId: videoId, srclang: srclang, label: label, vtt: vtt) { err in
+            DispatchQueue.main.async { completion(err) }
+        }
+    }
+
     // Refresh metadata from Bunny
     func refreshVideoDetails(itemId: UUID, completion: @escaping (UploadItem?) -> Void) {
         guard let idx = items.firstIndex(where: { $0.id == itemId }) else {

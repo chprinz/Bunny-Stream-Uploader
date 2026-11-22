@@ -252,4 +252,110 @@ final class APIService {
             completion(ok)
         }.resume()
     }
+
+    // Set chapters (replaces existing ones). End of each chapter = start of next; last ends at video length.
+    func updateChapters(
+        libraryId: String,
+        videoId: String,
+        chapters: [VideoChapter],
+        completion: @escaping (String?) -> Void
+    ) {
+        guard let url = URL(string: "https://video.bunnycdn.com/library/\(libraryId)/videos/\(videoId)") else {
+            completion("Invalid URL"); return
+        }
+        fetchVideoDetails(libraryId: libraryId, videoId: videoId) { _, json in
+            let length = (json?["length"] as? Double).map { Int($0) } ?? (json?["length"] as? Int) ?? 0
+            if length > 0, let bad = chapters.first(where: { $0.start >= length }) {
+                completion("Chapter \"\(bad.title)\" starts at \(ChapterParser.format(bad.start)), but the video is only \(ChapterParser.format(length)) long.")
+                return
+            }
+            var payload: [[String: Any]] = []
+            for (i, c) in chapters.enumerated() {
+                let next = i + 1 < chapters.count ? chapters[i + 1].start : max(length, c.start + 1)
+                payload.append(["title": c.title, "start": c.start, "end": max(next, c.start + 1)])
+            }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue(self.streamKey, forHTTPHeaderField: "AccessKey")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try? JSONSerialization.data(withJSONObject: ["chapters": payload])
+            self.session.dataTask(with: req) { data, response, error in
+                self.logResponse("updateChapters", data: data, response: response, error: error)
+                let code = (response as? HTTPURLResponse)?.statusCode ?? 500
+                if let error { completion(error.localizedDescription); return }
+                if code < 300 { completion(nil); return }
+                let body = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                completion("HTTP \(code) \(body.prefix(200)) (video length: \(length)s)")
+            }.resume()
+        }
+    }
+
+    // Add moments (merged with existing ones, de-duplicated)
+    func addMoments(
+        libraryId: String,
+        videoId: String,
+        moments: [VideoChapter],
+        completion: @escaping (String?) -> Void
+    ) {
+        guard let url = URL(string: "https://video.bunnycdn.com/library/\(libraryId)/videos/\(videoId)") else {
+            completion("Invalid URL"); return
+        }
+        fetchVideoDetails(libraryId: libraryId, videoId: videoId) { status, json in
+            guard let json else {
+                completion("Could not load the video from Bunny (HTTP \(status))."); return
+            }
+            let length = (json["length"] as? Double).map { Int($0) } ?? (json["length"] as? Int) ?? 0
+            if length > 0, let bad = moments.first(where: { $0.start > length }) {
+                completion("Moment \"\(bad.title)\" is at \(ChapterParser.format(bad.start)), but the video is only \(ChapterParser.format(length)) long.")
+                return
+            }
+            var merged: [[String: Any]] = []
+            var seen = Set<String>()
+            let existing = (json["moments"] as? [[String: Any]]) ?? []
+            for m in existing {
+                guard let label = m["label"] as? String, let ts = (m["timestamp"] as? Int) ?? (m["timestamp"] as? Double).map({ Int($0) }) else { continue }
+                if seen.insert("\(ts)|\(label)").inserted { merged.append(["label": label, "timestamp": ts]) }
+            }
+            for m in moments where seen.insert("\(m.start)|\(m.title)").inserted {
+                merged.append(["label": m.title, "timestamp": m.start])
+            }
+            self.postUpdate(url: url, body: ["moments": merged], label: "addMoments", completion: completion)
+        }
+    }
+
+    // Upload a captions file (WebVTT) for a language
+    func uploadCaptions(
+        libraryId: String,
+        videoId: String,
+        srclang: String,
+        label: String,
+        vtt: Data,
+        completion: @escaping (String?) -> Void
+    ) {
+        guard let escaped = srclang.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "https://video.bunnycdn.com/library/\(libraryId)/videos/\(videoId)/captions/\(escaped)") else {
+            completion("Invalid language code"); return
+        }
+        postUpdate(url: url,
+                   body: ["srclang": srclang, "label": label, "captionsFile": vtt.base64EncodedString()],
+                   label: "uploadCaptions",
+                   completion: completion)
+    }
+
+    private func postUpdate(url: URL, body: [String: Any], label: String, completion: @escaping (String?) -> Void) {
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue(streamKey, forHTTPHeaderField: "AccessKey")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        session.dataTask(with: req) { data, response, error in
+            self.logResponse(label, data: data, response: response, error: error)
+            if let error { completion(error.localizedDescription); return }
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 500
+            if code < 300 { completion(nil); return }
+            var msg = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            if let d = data, let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let m = j["message"] as? String { msg = m }
+            completion("\(msg.isEmpty ? "Request failed" : msg) (HTTP \(code))")
+        }.resume()
+    }
 }

@@ -17,6 +17,20 @@ struct UploadListView: View {
     @State private var showDeleteAlert = false
     @State private var pendingDeleteItem: UploadItem? = nil
     @State private var showHistory = false
+    @State private var chaptersItem: UploadItem? = nil
+    @State private var chaptersText = ""
+    @State private var chaptersError: String? = nil
+    @State private var isSavingChapters = false
+    @State private var momentsItem: UploadItem? = nil
+    @State private var momentsText = ""
+    @State private var momentsError: String? = nil
+    @State private var isSavingMoments = false
+    @State private var captionsItem: UploadItem? = nil
+    @State private var captionsFileURL: URL? = nil
+    @State private var captionsLang = "de"
+    @State private var captionsLabel = "Deutsch"
+    @State private var captionsError: String? = nil
+    @State private var isSavingCaptions = false
     @State private var showRemoteDeleteAlert = false
     @State private var pendingRemoteDeleteItem: UploadItem? = nil
     @State private var editingItemId: UUID? = nil
@@ -195,6 +209,15 @@ struct UploadListView: View {
                 } else {
                     Text("This will remove the video from Bunny and from this list.")
                 }
+            }
+            .sheet(item: $chaptersItem) { item in
+                chaptersSheet(for: item)
+            }
+            .sheet(item: $momentsItem) { item in
+                momentsSheet(for: item)
+            }
+            .sheet(item: $captionsItem) { item in
+                captionsSheet(for: item)
             }
             .onChange(of: showHistory) { _, newValue in
                 if newValue { syncHistoryWithRemote() }
@@ -407,6 +430,27 @@ struct UploadListView: View {
                         Button("Copy play URL") { copyPlayURL(url) }
                     }
 
+                    if item.videoId != nil {
+                        Button("Set chapters…") {
+                            chaptersText = ""
+                            chaptersError = nil
+                            chaptersItem = item
+                        }
+                    }
+
+                    if item.videoId != nil {
+                        Button("Add moments…") {
+                            momentsText = ""
+                            momentsError = nil
+                            momentsItem = item
+                        }
+                        Button("Upload captions…") {
+                            captionsFileURL = nil
+                            captionsError = nil
+                            captionsItem = item
+                        }
+                    }
+
                     if let url = dashboardURL(for: item) {
                         Button("Open in Dashboard") {
                             NSWorkspace.shared.open(url)
@@ -434,6 +478,159 @@ struct UploadListView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(Color.primary.opacity(0.025))
         )
+    }
+
+    // MARK: - Chapters
+
+    private func chaptersSheet(for item: UploadItem) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Set chapters").font(.headline)
+            Text("One chapter per line: mm:ss or hh:mm:ss, then the title. Replaces existing chapters.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            TextEditor(text: $chaptersText)
+                .font(.system(.body, design: .monospaced))
+                .frame(width: 420, height: 200)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+            if let err = chaptersError {
+                Text(err).font(.caption).foregroundColor(.red)
+            }
+            HStack {
+                if isSavingChapters { ProgressView().scaleEffect(0.7) }
+                Spacer()
+                Button("Cancel") { chaptersItem = nil }
+                Button("Save") { saveChapters(for: item) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(isSavingChapters || chaptersText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+    }
+
+    private func saveChapters(for item: UploadItem) {
+        switch ChapterParser.parse(chaptersText) {
+        case .failure(let err):
+            chaptersError = err.message
+        case .success(let chapters):
+            chaptersError = nil
+            isSavingChapters = true
+            uploads.setChapters(itemId: item.id, chapters: chapters) { err in
+                isSavingChapters = false
+                if let err { chaptersError = "Could not save chapters: \(err)" } else { chaptersItem = nil }
+            }
+        }
+    }
+
+    // MARK: - Moments
+
+    private func momentsSheet(for item: UploadItem) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add moments").font(.headline)
+            Text("One moment per line: mm:ss or hh:mm:ss, then the label. Added to existing moments.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            TextEditor(text: $momentsText)
+                .font(.system(.body, design: .monospaced))
+                .frame(width: 420, height: 200)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+            if let err = momentsError {
+                Text(err).font(.caption).foregroundColor(.red)
+            }
+            HStack {
+                if isSavingMoments { ProgressView().scaleEffect(0.7) }
+                Spacer()
+                Button("Cancel") { momentsItem = nil }
+                Button("Save") { saveMoments(for: item) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(isSavingMoments || momentsText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+    }
+
+    private func saveMoments(for item: UploadItem) {
+        switch ChapterParser.parse(momentsText) {
+        case .failure(let err):
+            momentsError = err.message
+        case .success(let moments):
+            momentsError = nil
+            isSavingMoments = true
+            uploads.addMoments(itemId: item.id, moments: moments) { err in
+                isSavingMoments = false
+                if let err { momentsError = "Could not save moments: \(err)" } else { momentsItem = nil }
+            }
+        }
+    }
+
+    // MARK: - Captions
+
+    private func captionsSheet(for item: UploadItem) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Upload captions").font(.headline)
+            Text("WebVTT (.vtt) or SubRip (.srt) file. An existing caption in the same language is replaced.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            HStack {
+                Button("Choose file…") { pickCaptionsFile() }
+                Text(captionsFileURL?.lastPathComponent ?? "No file selected")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+            HStack {
+                TextField("Language code (de, en, …)", text: $captionsLang)
+                    .frame(width: 150)
+                TextField("Label", text: $captionsLabel)
+                    .frame(width: 200)
+            }
+            .textFieldStyle(.roundedBorder)
+            if let err = captionsError {
+                Text(err).font(.caption).foregroundColor(.red)
+            }
+            HStack {
+                if isSavingCaptions { ProgressView().scaleEffect(0.7) }
+                Spacer()
+                Button("Cancel") { captionsItem = nil }
+                Button("Upload") { saveCaptions(for: item) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(isSavingCaptions || captionsFileURL == nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 440)
+    }
+
+    private func pickCaptionsFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = ["vtt", "srt"].compactMap { UTType(filenameExtension: $0) }
+        panel.begin { resp in
+            if resp == .OK { captionsFileURL = panel.url }
+        }
+    }
+
+    private func saveCaptions(for item: UploadItem) {
+        guard let fileURL = captionsFileURL else { return }
+        let lang = captionsLang.trimmingCharacters(in: .whitespaces).lowercased()
+        let label = captionsLabel.trimmingCharacters(in: .whitespaces)
+        guard !lang.isEmpty else { captionsError = "Please enter a language code, e.g. \"de\"."; return }
+        guard !label.isEmpty else { captionsError = "Please enter a label, e.g. \"Deutsch\"."; return }
+        guard let raw = try? Data(contentsOf: fileURL), var text = String(data: raw, encoding: .utf8) else {
+            captionsError = "Could not read the file as UTF-8 text."; return
+        }
+        if !text.contains("WEBVTT") {
+            // Treat as SRT: timestamps use commas, and the WEBVTT header is required.
+            let converted = text.replacingOccurrences(of: "\r\n", with: "\n")
+                .replacingOccurrences(of: #"(\d{2}:\d{2}:\d{2}),(\d{3})"#, with: "$1.$2", options: .regularExpression)
+            text = "WEBVTT\n\n" + converted
+        }
+        captionsError = nil
+        isSavingCaptions = true
+        uploads.uploadCaptions(itemId: item.id, srclang: lang, label: label, vtt: Data(text.utf8)) { err in
+            isSavingCaptions = false
+            if let err { captionsError = "Could not upload captions: \(err)" } else { captionsItem = nil }
+        }
     }
 
     // MARK: - URL helpers
@@ -567,21 +764,29 @@ struct UploadListView: View {
 
         panel.begin { resp in
             guard resp == .OK, let url = panel.url else { return }
-            guard let data = try? Data(contentsOf: url) else {
-                lastEditError = "Could not read file."
-                return
-            }
-            let mime = mimeType(for: url)
-            isUploadingThumbnail = true
-            lastEditError = nil
-            uploads.uploadThumbnail(itemId: item.id, data: data, mimeType: mime) { ok in
-                DispatchQueue.main.async {
-                    isUploadingThumbnail = false
-                    if !ok {
-                        lastEditError = "Thumbnail upload failed."
-                    } else {
-                        loadDetails(for: item)
-                    }
+            uploadThumbnailFile(url, for: item)
+        }
+    }
+
+    private func uploadThumbnailFile(_ url: URL, for item: UploadItem) {
+        guard item.videoId != nil else { return }
+        guard ["png", "jpg", "jpeg", "heic", "tif", "tiff"].contains(url.pathExtension.lowercased()) else {
+            lastEditError = "Unsupported image type. Use PNG, JPEG, HEIC or TIFF."
+            return
+        }
+        guard let data = try? Data(contentsOf: url) else {
+            lastEditError = "Could not read file."
+            return
+        }
+        isUploadingThumbnail = true
+        lastEditError = nil
+        uploads.uploadThumbnail(itemId: item.id, data: data, mimeType: mimeType(for: url)) { ok in
+            DispatchQueue.main.async {
+                isUploadingThumbnail = false
+                if !ok {
+                    lastEditError = "Thumbnail upload failed."
+                } else {
+                    loadDetails(for: item)
                 }
             }
         }
@@ -699,6 +904,14 @@ struct UploadListView: View {
                 : "Change thumbnail"
         )
         .disabled(item.videoId == nil)
+        .onDrop(of: [UTType.fileURL], isTargeted: nil) { providers in
+            guard item.videoId != nil, let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                DispatchQueue.main.async { uploadThumbnailFile(url, for: item) }
+            }
+            return true
+        }
     }
 
     private func controlButton(systemName: String, action: @escaping () -> Void, hint: String) -> some View {
