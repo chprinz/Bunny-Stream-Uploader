@@ -610,11 +610,68 @@ final class UploadManager: ObservableObject {
         }
     }
 
-    func addMoments(itemId: UUID, moments: [VideoChapter], completion: @escaping (String?) -> Void) {
+    func fetchChapters(itemId: UUID, completion: @escaping ([VideoChapter]?) -> Void) {
+        guard let item = items.first(where: { $0.id == itemId }),
+              let videoId = item.videoId,
+              let api = apiService(for: item) else { completion(nil); return }
+        api.fetchVideoDetails(libraryId: item.libraryId, videoId: videoId) { _, json in
+            guard let json else { DispatchQueue.main.async { completion(nil) }; return }
+            let raw = (json["chapters"] as? [[String: Any]]) ?? []
+            let chapters: [VideoChapter] = raw.compactMap { c in
+                guard let title = c["title"] as? String,
+                      let start = (c["start"] as? Int) ?? (c["start"] as? Double).map({ Int($0) }) else { return nil }
+                return VideoChapter(title: title, start: start)
+            }.sorted { $0.start < $1.start }
+            DispatchQueue.main.async { completion(chapters) }
+        }
+    }
+
+    func fetchMoments(itemId: UUID, completion: @escaping ([VideoChapter]?) -> Void) {
+        guard let item = items.first(where: { $0.id == itemId }),
+              let videoId = item.videoId,
+              let api = apiService(for: item) else { completion(nil); return }
+        api.fetchVideoDetails(libraryId: item.libraryId, videoId: videoId) { _, json in
+            guard let json else { DispatchQueue.main.async { completion(nil) }; return }
+            let raw = (json["moments"] as? [[String: Any]]) ?? []
+            let moments: [VideoChapter] = raw.compactMap { m in
+                guard let label = m["label"] as? String,
+                      let ts = (m["timestamp"] as? Int) ?? (m["timestamp"] as? Double).map({ Int($0) }) else { return nil }
+                return VideoChapter(title: label, start: ts)
+            }.sorted { $0.start < $1.start }
+            DispatchQueue.main.async { completion(moments) }
+        }
+    }
+
+    func setMoments(itemId: UUID, moments: [VideoChapter], completion: @escaping (String?) -> Void) {
         guard let item = items.first(where: { $0.id == itemId }),
               let videoId = item.videoId,
               let api = apiService(for: item) else { completion("Missing API key or video"); return }
-        api.addMoments(libraryId: item.libraryId, videoId: videoId, moments: moments) { err in
+        api.setMoments(libraryId: item.libraryId, videoId: videoId, moments: moments) { err in
+            DispatchQueue.main.async { completion(err) }
+        }
+    }
+
+    /// Returns (srclang, label) pairs of existing captions.
+    func fetchCaptions(itemId: UUID, completion: @escaping ([(lang: String, label: String)]?) -> Void) {
+        guard let item = items.first(where: { $0.id == itemId }),
+              let videoId = item.videoId,
+              let api = apiService(for: item) else { completion(nil); return }
+        api.fetchVideoDetails(libraryId: item.libraryId, videoId: videoId) { _, json in
+            guard let json else { DispatchQueue.main.async { completion(nil) }; return }
+            let raw = (json["captions"] as? [[String: Any]]) ?? []
+            let caps = raw.compactMap { c -> (lang: String, label: String)? in
+                guard let lang = c["srclang"] as? String else { return nil }
+                return (lang, (c["label"] as? String) ?? lang)
+            }
+            DispatchQueue.main.async { completion(caps) }
+        }
+    }
+
+    func deleteCaption(itemId: UUID, srclang: String, completion: @escaping (String?) -> Void) {
+        guard let item = items.first(where: { $0.id == itemId }),
+              let videoId = item.videoId,
+              let api = apiService(for: item) else { completion("Missing API key or video"); return }
+        api.deleteCaption(libraryId: item.libraryId, videoId: videoId, srclang: srclang) { err in
             DispatchQueue.main.async { completion(err) }
         }
     }

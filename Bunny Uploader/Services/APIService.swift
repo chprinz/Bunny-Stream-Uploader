@@ -290,8 +290,8 @@ final class APIService {
         }
     }
 
-    // Add moments (merged with existing ones, de-duplicated)
-    func addMoments(
+    // Set moments (replaces existing ones)
+    func setMoments(
         libraryId: String,
         videoId: String,
         moments: [VideoChapter],
@@ -309,18 +309,30 @@ final class APIService {
                 completion("Moment \"\(bad.title)\" is at \(ChapterParser.format(bad.start)), but the video is only \(ChapterParser.format(length)) long.")
                 return
             }
-            var merged: [[String: Any]] = []
-            var seen = Set<String>()
-            let existing = (json["moments"] as? [[String: Any]]) ?? []
-            for m in existing {
-                guard let label = m["label"] as? String, let ts = (m["timestamp"] as? Int) ?? (m["timestamp"] as? Double).map({ Int($0) }) else { continue }
-                if seen.insert("\(ts)|\(label)").inserted { merged.append(["label": label, "timestamp": ts]) }
-            }
-            for m in moments where seen.insert("\(m.start)|\(m.title)").inserted {
-                merged.append(["label": m.title, "timestamp": m.start])
-            }
-            self.postUpdate(url: url, body: ["moments": merged], label: "addMoments", completion: completion)
+            let payload = moments.map { ["label": $0.title, "timestamp": $0.start] as [String: Any] }
+            self.postUpdate(url: url, body: ["moments": payload], label: "setMoments", completion: completion)
         }
+    }
+
+    func deleteCaption(
+        libraryId: String,
+        videoId: String,
+        srclang: String,
+        completion: @escaping (String?) -> Void
+    ) {
+        guard let escaped = srclang.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "https://video.bunnycdn.com/library/\(libraryId)/videos/\(videoId)/captions/\(escaped)") else {
+            completion("Invalid language code"); return
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "DELETE"
+        req.setValue(streamKey, forHTTPHeaderField: "AccessKey")
+        session.dataTask(with: req) { data, response, error in
+            self.logResponse("deleteCaption", data: data, response: response, error: error)
+            if let error { completion(error.localizedDescription); return }
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 500
+            completion(code < 300 || code == 404 ? nil : "Request failed (HTTP \(code))")
+        }.resume()
     }
 
     // Upload a captions file (WebVTT) for a language

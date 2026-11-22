@@ -21,10 +21,14 @@ struct UploadListView: View {
     @State private var chaptersText = ""
     @State private var chaptersError: String? = nil
     @State private var isSavingChapters = false
+    @State private var isLoadingChapters = false
     @State private var momentsItem: UploadItem? = nil
     @State private var momentsText = ""
     @State private var momentsError: String? = nil
     @State private var isSavingMoments = false
+    @State private var isLoadingMoments = false
+    @State private var existingCaptions: [(lang: String, label: String)] = []
+    @State private var isLoadingCaptions = false
     @State private var captionsItem: UploadItem? = nil
     @State private var captionsFileURL: URL? = nil
     @State private var captionsLang = "de"
@@ -435,19 +439,38 @@ struct UploadListView: View {
                             chaptersText = ""
                             chaptersError = nil
                             chaptersItem = item
+                            isLoadingChapters = true
+                            uploads.fetchChapters(itemId: item.id) { existing in
+                                isLoadingChapters = false
+                                if let existing, chaptersText.isEmpty {
+                                    chaptersText = existing
+                                        .map { "\(ChapterParser.format($0.start)) \($0.title)" }
+                                        .joined(separator: "\n")
+                                }
+                            }
                         }
                     }
 
                     if item.videoId != nil {
-                        Button("Add moments…") {
+                        Button("Edit moments…") {
                             momentsText = ""
                             momentsError = nil
                             momentsItem = item
+                            isLoadingMoments = true
+                            uploads.fetchMoments(itemId: item.id) { existing in
+                                isLoadingMoments = false
+                                if let existing, momentsText.isEmpty {
+                                    momentsText = existing
+                                        .map { "\(ChapterParser.format($0.start)) \($0.title)" }
+                                        .joined(separator: "\n")
+                                }
+                            }
                         }
-                        Button("Upload captions…") {
+                        Button("Captions…") {
                             captionsFileURL = nil
                             captionsError = nil
                             captionsItem = item
+                            reloadCaptions(for: item)
                         }
                     }
 
@@ -485,7 +508,7 @@ struct UploadListView: View {
     private func chaptersSheet(for item: UploadItem) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Set chapters").font(.headline)
-            Text("One chapter per line: mm:ss or hh:mm:ss, then the title. Replaces existing chapters.")
+            Text("One chapter per line: mm:ss or hh:mm:ss, then the title. Existing chapters are loaded below; saving replaces all of them.")
                 .font(.caption)
                 .foregroundColor(.secondary)
             TextEditor(text: $chaptersText)
@@ -496,7 +519,7 @@ struct UploadListView: View {
                 Text(err).font(.caption).foregroundColor(.red)
             }
             HStack {
-                if isSavingChapters { ProgressView().scaleEffect(0.7) }
+                if isSavingChapters || isLoadingChapters { ProgressView().scaleEffect(0.7) }
                 Spacer()
                 Button("Cancel") { chaptersItem = nil }
                 Button("Save") { saveChapters(for: item) }
@@ -525,8 +548,8 @@ struct UploadListView: View {
 
     private func momentsSheet(for item: UploadItem) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Add moments").font(.headline)
-            Text("One moment per line: mm:ss or hh:mm:ss, then the label. Added to existing moments.")
+            Text("Moments").font(.headline)
+            Text("One moment per line: mm:ss or hh:mm:ss, then the label. Existing moments are loaded below; saving replaces all of them.")
                 .font(.caption)
                 .foregroundColor(.secondary)
             TextEditor(text: $momentsText)
@@ -537,7 +560,7 @@ struct UploadListView: View {
                 Text(err).font(.caption).foregroundColor(.red)
             }
             HStack {
-                if isSavingMoments { ProgressView().scaleEffect(0.7) }
+                if isSavingMoments || isLoadingMoments { ProgressView().scaleEffect(0.7) }
                 Spacer()
                 Button("Cancel") { momentsItem = nil }
                 Button("Save") { saveMoments(for: item) }
@@ -555,7 +578,7 @@ struct UploadListView: View {
         case .success(let moments):
             momentsError = nil
             isSavingMoments = true
-            uploads.addMoments(itemId: item.id, moments: moments) { err in
+            uploads.setMoments(itemId: item.id, moments: moments) { err in
                 isSavingMoments = false
                 if let err { momentsError = "Could not save moments: \(err)" } else { momentsItem = nil }
             }
@@ -566,7 +589,29 @@ struct UploadListView: View {
 
     private func captionsSheet(for item: UploadItem) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Upload captions").font(.headline)
+            Text("Captions").font(.headline)
+            if isLoadingCaptions {
+                ProgressView().scaleEffect(0.7)
+            } else if existingCaptions.isEmpty {
+                Text("No captions yet.").font(.caption).foregroundColor(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(existingCaptions, id: \.lang) { cap in
+                        HStack {
+                            Text("\(cap.lang) – \(cap.label)").font(.subheadline)
+                            Spacer()
+                            Button(role: .destructive) {
+                                deleteCaption(cap.lang, for: item)
+                            } label: { Image(systemName: "trash") }
+                            .buttonStyle(.borderless)
+                            .help("Delete this caption")
+                        }
+                    }
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.05)))
+            }
+            Divider()
             Text("WebVTT (.vtt) or SubRip (.srt) file. An existing caption in the same language is replaced.")
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -590,7 +635,7 @@ struct UploadListView: View {
             HStack {
                 if isSavingCaptions { ProgressView().scaleEffect(0.7) }
                 Spacer()
-                Button("Cancel") { captionsItem = nil }
+                Button("Close") { captionsItem = nil }
                 Button("Upload") { saveCaptions(for: item) }
                     .keyboardShortcut(.defaultAction)
                     .disabled(isSavingCaptions || captionsFileURL == nil)
@@ -598,6 +643,21 @@ struct UploadListView: View {
         }
         .padding(20)
         .frame(width: 440)
+    }
+
+    private func reloadCaptions(for item: UploadItem) {
+        isLoadingCaptions = true
+        uploads.fetchCaptions(itemId: item.id) { caps in
+            isLoadingCaptions = false
+            existingCaptions = caps ?? []
+        }
+    }
+
+    private func deleteCaption(_ lang: String, for item: UploadItem) {
+        captionsError = nil
+        uploads.deleteCaption(itemId: item.id, srclang: lang) { err in
+            if let err { captionsError = "Could not delete caption: \(err)" } else { reloadCaptions(for: item) }
+        }
     }
 
     private func pickCaptionsFile() {
@@ -629,7 +689,7 @@ struct UploadListView: View {
         isSavingCaptions = true
         uploads.uploadCaptions(itemId: item.id, srclang: lang, label: label, vtt: Data(text.utf8)) { err in
             isSavingCaptions = false
-            if let err { captionsError = "Could not upload captions: \(err)" } else { captionsItem = nil }
+            if let err { captionsError = "Could not upload captions: \(err)" } else { captionsFileURL = nil; reloadCaptions(for: item) }
         }
     }
 
